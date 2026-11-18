@@ -1,0 +1,23 @@
+version: "3.8"
+
+services:
+  usdjpy-collector:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: usdjpy-collector
+    restart: unless-stopped
+    volumes:
+      # Persistent bind mount for SQLite database and WAL/SHM journaling files
+      - ./data:/app/data
+    environment:
+      - FX_DB_PATH=/app/data/usdjpy_signals.db
+      - FRED_API_KEY=${FRED_API_KEY:-}
+      - POLL_INTERVAL_NEWS=300
+      - POLL_INTERVAL_TICKS=900
+      - LOG_LEVEL=INFO
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
