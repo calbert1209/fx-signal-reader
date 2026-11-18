@@ -75,10 +75,10 @@ The architecture is designed to run locally with minimal cloud dependencies, com
 
 ### Phase 2: Collection Architecture & Local Persistence
 - [x] **SQLite schema design:** Define `market_ticks`, `yield_spreads`, `macro_events`, and `news_headlines` with WAL mode and deduplication keys (`schema.sql` drafted).
-- [ ] **Modular collector scripts:** Implement workers for market ticks & yields (`collector.py` starter drafted), Forex Factory calendar events, and RSS intervention headlines with retry/backoff logic.
+- [x] **Modular collector scripts:** Implement workers for market ticks & yields (`collectors/market_ticks.py`), Forex Factory calendar events (`collectors/calendar.py`), and RSS intervention headlines (`collectors/news_rss.py`) with retry/backoff logic (`collectors/base.py`) and CLI entrypoint (`collector.py`).
 - [x] **Normalization & spread calculation:** Enforce ISO-8601 UTC timestamps across all sources, deduplicate news via URL hashes, and compute `US10Y - JGB10Y` automatically on write (implemented in `normalizer.py` and `spread_calculator.py` with 28/28 unit tests passing).
-- [ ] **Containerization:** Create `Dockerfile` and `docker-compose.yml` with a persistent bind mount for `usdjpy_signals.db`.
-- [ ] **Tiered scheduling:** Configure polling cadences (e.g., 5 minutes for RSS headlines, 15 minutes for market ticks, daily for the economic calendar).
+- [x] **Containerization:** Create `Dockerfile` and `docker-compose.yml` with a persistent bind mount for `usdjpy_signals.db` (Python 3.11-slim, non-root user `appuser`, healthcheck, SIGTERM stopsignal).
+- [x] **Tiered scheduling:** Configure polling cadences in `scheduler.py` (5m RSS headlines, 15m market ticks with Tokyo Fix expedited cadence, daily 00:05 UTC calendar refresh).
 
 ### Phase 3: Agent Integration (MCP & LangGraph)
 - [ ] **Custom SQLite MCP server:** Build a local read-only MCP server exposing tools such as `get_latest_yield_spread`, `get_upcoming_macro_events`, and `get_recent_mof_alerts`.
