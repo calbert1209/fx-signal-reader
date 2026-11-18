@@ -1,0 +1,27 @@
+{
+  "mcpServers": {
+    "usdjpy-sqlite": {
+      "command": "/Users/albert/Projects/fx-signal-reader/.venv/bin/python",
+      "args": [
+        "/Users/albert/Projects/fx-signal-reader/mcp_server.py"
+      ],
+      "env": {
+        "FX_DB_PATH": "/Users/albert/Projects/fx-signal-reader/usdjpy_signals.db"
+      }
+    },
+    "nasdaq-data-link": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "/Users/albert/Projects/nasdaq-data-link-mcp",
+        "nasdaq_data_link_mcp_os/server.py"
+      ],
+      "cwd": "/Users/albert/Projects/nasdaq-data-link-mcp",
+      "env": {
+        "NASDAQ_DATA_LINK_API_KEY": "${NASDAQ_DATA_LINK_API_KEY}",
+        "PYTHONPATH": "/Users/albert/Projects/nasdaq-data-link-mcp"
+      }
+    }
+  }
+}
