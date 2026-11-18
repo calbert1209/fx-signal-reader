@@ -81,16 +81,17 @@ The architecture is designed to run locally with minimal cloud dependencies, com
 - [x] **Tiered scheduling:** Configure polling cadences in `scheduler.py` (5m RSS headlines, 15m market ticks with Tokyo Fix expedited cadence, daily 00:05 UTC calendar refresh).
 
 ### Phase 3: Agent Integration (MCP & LangGraph)
-- [ ] **Custom SQLite MCP server:** Build a local read-only MCP server exposing tools such as `get_latest_yield_spread`, `get_upcoming_macro_events`, and `get_recent_mof_alerts`.
-- [ ] **Multi-server MCP setup:** Wire the custom SQLite MCP server alongside the Nasdaq Data Link MCP server and verify tool discovery.
-- [ ] **LangGraph state definition:** Define the shared graph state schema (yield bias, risk-on/risk-off regime, intervention risk score, trade proposal).
-- [ ] **Specialist agent nodes:** Implement the Macro Analyst node (yields + calendar) and Risk Committee node (VIX + MoF headlines) with structured outputs.
-- [ ] **Approval gate & paper execution:** Connect nodes with a human-in-the-loop interrupt before routing approved signals to paper-trading execution.
+- [x] **Custom SQLite MCP server:** Built read-only SQLite MCP server (`mcp_server.py`, `?mode=ro` + `PRAGMA query_only=ON`) exposing `get_latest_yield_spread`, `get_upcoming_macro_events`, `get_recent_mof_alerts`, and `get_market_ticks_summary` over stdio (`15/15` tests passing).
+- [x] **Multi-server MCP setup:** Wired `usdjpy-sqlite` alongside `nasdaq-data-link` via `mcp_servers.json` and `MultiServerMCPClient` (`mcp_client.py`), verifying simultaneous stdio tool discovery (9 namespaced tools + `nasdaq://databases` resource; `11/11` tests passing).
+- [x] **LangGraph state definition:** Defined Pydantic v2 structured models (`MacroAssessment`, `RiskAssessment`, `TradeProposal`, `ExecutionReceipt`) and shared `AgentState` `TypedDict` with `operator.add` reducer on `audit_log` (`agent/state.py`, `15/15` tests passing).
+- [x] **Specialist agent nodes:** Implemented `macro_analyst_node` and `risk_committee_node` (`agent/nodes.py`) consuming read-only SQLite tools and enforcing 4-tier MoF intervention veto logic (`9/9` tests passing).
+- [x] **Approval gate & paper execution:** Built full `StateGraph(AgentState)` with `InMemorySaver` checkpointer, `interrupt_before=["paper_execution"]` human gate, JSONL paper ledger (`data/paper_trades.jsonl`), and CLI runner `run_pipeline.py` (`7/7` tests passing).
 
 ---
 
 ## 5. Current Implementation Status
 
-Two starter artifacts have been drafted to kick off Phase 2:
-* **`schema.sql`:** Configures SQLite in WAL mode and creates the four core tables (`market_ticks`, `yield_spreads`, `macro_events`, `news_headlines`) with descending timestamp indexes.
-* **`collector.py`:** Initializes the database, pulls core market and yield tickers via `yfinance` (with a daily fallback for `^JB10YR`), optionally pulls official US 2Y/10Y yields via FRED when `FRED_API_KEY` is provided, and writes the calculated 10Y spread to `yield_spreads`.
+All tasks across **Phases 1, 2, and 3** are complete and verified:
+* **Phase 1 (Data Sources):** FRED (`DGS2`/`DGS10`), Yahoo Finance (`JPY=X`, `^TNX`, `^GSPC`, `^N225`, `^VIX`, `GC=F`) + Japan MoF CSV JGB 10Y benchmark (`mof.go.jp`), Forex Factory calendar JSON/cache, and 10 curated intervention RSS wires.
+* **Phase 2 (Collection & Containerization):** WAL-mode SQLite schema (`schema.sql`), modular collectors (`collectors/`), ISO-8601 UTC normalization & spread engine (`normalizer.py`, `spread_calculator.py`), tiered session-aware scheduler (`scheduler.py`), and `Dockerfile` / `docker-compose.yml`.
+* **Phase 3 (MCP & LangGraph Agents):** Read-only SQLite MCP server (`mcp_server.py`), dual-server stdio MCP client (`mcp_client.py`, `mcp_servers.json`), typed LangGraph state & specialist nodes (`agent/state.py`, `agent/nodes.py`), and `interrupt_before` human approval gate + paper execution (`agent/graph.py`, `run_pipeline.py`).

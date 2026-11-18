@@ -1,0 +1,250 @@
+#!/usr/bin/env python3
+"""
+CLI Runner for the USD/JPY Signal Reader LangGraph Multi-Agent Pipeline.
+Task P3-05: Approval Gate and Paper Execution
+
+Executes:
+  macro_analyst -> risk_committee -> human_approval_gate -> paper_execution / finalize_hold
+
+Supports:
+  - Interactive human-in-the-loop approval prompt (when TTY and actionable)
+  - Non-interactive `--auto-approve` or `--reject` flags with `--reviewer-notes`
+  - Clean structured text report or `--json` output
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+import sys
+from typing import Any
+import uuid
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from agent.graph import (
+    DEFAULT_LEDGER_PATH,
+    build_signal_graph,
+    resume_with_decision,
+)
+from agent.state import create_initial_state
+
+
+def run_signal_pipeline(
+    *,
+    db_path: str | None = None,
+    ledger_path: str | Path | None = None,
+    thread_id: str | None = None,
+    auto_approve: bool = False,
+    reject: bool = False,
+    reviewer_notes: str | None = None,
+    interactive: bool = False,
+) -> dict[str, Any]:
+    """
+    Execute the USD/JPY LangGraph pipeline end-to-end and return a structured result payload.
+    """
+    if auto_approve and reject:
+        raise ValueError("Cannot specify both auto_approve=True and reject=True.")
+
+    resolved_thread = thread_id.strip() if thread_id and thread_id.strip() else f"run-{uuid.uuid4().hex[:12]}"
+    resolved_ledger = Path(ledger_path) if ledger_path is not None else DEFAULT_LEDGER_PATH
+
+    graph = build_signal_graph(
+        db_path=db_path,
+        ledger_path=resolved_ledger,
+        interrupt_on_actionable=True,
+    )
+    config = {"configurable": {"thread_id": resolved_thread}}
+    initial_state = create_initial_state(run_id=resolved_thread)
+
+    final_state = graph.invoke(initial_state, config=config)
+    snapshot = graph.get_state(config)
+    paused = bool(snapshot.next)
+
+    if paused and "paper_execution" in snapshot.next:
+        if auto_approve:
+            final_state = resume_with_decision(
+                graph,
+                config,
+                approved=True,
+                reviewer_notes=reviewer_notes or "Auto-approved via CLI --auto-approve.",
+            )
+            paused = False
+        elif reject:
+            final_state = resume_with_decision(
+                graph,
+                config,
+                approved=False,
+                reviewer_notes=reviewer_notes or "Rejected via CLI --reject.",
+            )
+            paused = False
+        elif interactive:
+            proposal = final_state.get("trade_proposal") or {}
+            print("\n" + "=" * 72)
+            print("HUMAN APPROVAL REQUIRED BEFORE PAPER EXECUTION")
+            print("=" * 72)
+            print(
+                f"Proposal: {proposal.get('action')} {proposal.get('position_size_units')} "
+                f"{proposal.get('pair')} @ {proposal.get('entry_price')} "
+                f"(SL: {proposal.get('stop_loss')}, TP: {proposal.get('take_profit')})"
+            )
+            print(f"Rationale: {proposal.get('rationale')}")
+            try:
+                answer = input("Approve paper trade execution? [y/N]: ").strip().lower()
+            except EOFError:
+                answer = ""
+            approved = answer in {"y", "yes"}
+            final_state = resume_with_decision(
+                graph,
+                config,
+                approved=approved,
+                reviewer_notes=reviewer_notes
+                or ("Approved interactively via CLI." if approved else "Declined interactively via CLI."),
+            )
+            paused = False
+
+    snapshot_after = graph.get_state(config)
+    return {
+        "thread_id": resolved_thread,
+        "paused_for_approval": paused,
+        "next_nodes": list(snapshot_after.next),
+        "state": dict(final_state),
+    }
+
+
+def format_pipeline_summary(result: dict[str, Any]) -> str:
+    """Format a human-readable summary of the pipeline assessment and execution receipt."""
+    state = result.get("state", {})
+    macro = state.get("macro_assessment") or {}
+    risk = state.get("risk_assessment") or {}
+    proposal = state.get("trade_proposal") or {}
+    receipt = state.get("execution_receipt") or {}
+
+    lines = [
+        "=" * 74,
+        "USD/JPY Signal Reader - LangGraph Multi-Agent Pipeline Report",
+        "=" * 74,
+        f"Thread / Run ID    : {result.get('thread_id')}",
+        f"Timestamp (UTC)    : {state.get('timestamp_utc')}",
+        f"USD/JPY Spot       : {state.get('spot_price')}",
+        f"Awaiting Approval  : {result.get('paused_for_approval')} (next={result.get('next_nodes')})",
+        "-" * 74,
+        "[1] Macro Analyst Assessment",
+        f"    Yield Bias     : {state.get('yield_bias')} (confidence={macro.get('confidence')})",
+        f"    10Y Yields     : US={macro.get('us_10y')}% | JP={macro.get('jp_10y')}% | Spread={macro.get('spread_10y')}% ({macro.get('spread_bps')} bps)",
+        f"    High Catalysts : {len(macro.get('upcoming_high_impact_events') or [])} event(s)",
+        f"    Summary        : {macro.get('policy_divergence_summary')}",
+        "-" * 74,
+        "[2] Risk Committee Assessment",
+        f"    Risk Regime    : {state.get('risk_regime')} (VIX={risk.get('vix_level')})",
+        f"    Cross-Assets   : S&P500={risk.get('sp500_price')} | Nikkei={risk.get('nikkei_price')} | Gold={risk.get('gold_price')}",
+        f"    Intervention   : score={state.get('intervention_risk_score')} [{risk.get('intervention_alert_level')}] | MoF Tier={risk.get('highest_mof_tier')} | Veto={risk.get('veto_trade')}",
+        f"    Risk Notes     : {risk.get('risk_notes')}",
+        "-" * 74,
+        "[3] Trade Proposal & Approval Gate",
+        f"    Proposal ID    : {proposal.get('proposal_id')}",
+        f"    Action         : {proposal.get('action')} {proposal.get('position_size_units')} {proposal.get('pair')}",
+        f"    Levels         : Entry={proposal.get('entry_price')} | SL={proposal.get('stop_loss')} | TP={proposal.get('take_profit')} | R:R={proposal.get('risk_reward_ratio')}",
+        f"    Approval Status: {state.get('approval_status')} (notes={state.get('reviewer_notes')})",
+        f"    Rationale      : {proposal.get('rationale')}",
+    ]
+
+    if receipt:
+        lines.extend(
+            [
+                "-" * 74,
+                "[4] Paper Execution Receipt",
+                f"    Order ID       : {receipt.get('order_id')}",
+                f"    Status         : {receipt.get('status')}",
+                f"    Fill / Units   : {receipt.get('action')} {receipt.get('position_size_units')} @ {receipt.get('fill_price')}",
+                f"    Executed (UTC) : {receipt.get('executed_at_utc')}",
+                f"    Notes          : {receipt.get('notes')}",
+            ]
+        )
+
+    lines.append("=" * 74)
+    return "\n".join(lines)
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    """Create CLI argument parser for `run_pipeline.py`."""
+    parser = argparse.ArgumentParser(
+        description="Run the USD/JPY LangGraph multi-agent signal and paper-execution pipeline."
+    )
+    parser.add_argument(
+        "--db-path",
+        type=str,
+        default=None,
+        help="Path to SQLite database (defaults to FX_DB_PATH or usdjpy_signals.db).",
+    )
+    parser.add_argument(
+        "--ledger-path",
+        type=str,
+        default=str(DEFAULT_LEDGER_PATH),
+        help="Path to JSONL ledger storing executed paper trades.",
+    )
+    parser.add_argument(
+        "--thread-id",
+        type=str,
+        default=None,
+        help="Optional LangGraph thread ID for checkpointed execution.",
+    )
+    decision_group = parser.add_mutually_exclusive_group()
+    decision_group.add_argument(
+        "--auto-approve",
+        action="store_true",
+        help="Automatically approve actionable trade proposals at the human gate.",
+    )
+    decision_group.add_argument(
+        "--reject",
+        action="store_true",
+        help="Automatically reject actionable trade proposals at the human gate.",
+    )
+    parser.add_argument(
+        "--reviewer-notes",
+        type=str,
+        default=None,
+        help="Optional reviewer notes attached to the human approval decision.",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output the complete pipeline result as JSON.",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entrypoint for `run_pipeline.py`."""
+    parser = build_arg_parser()
+    args = parser.parse_args(argv)
+
+    interactive = (
+        not args.json
+        and not args.auto_approve
+        and not args.reject
+        and sys.stdin.isatty()
+    )
+
+    result = run_signal_pipeline(
+        db_path=args.db_path,
+        ledger_path=args.ledger_path,
+        thread_id=args.thread_id,
+        auto_approve=args.auto_approve,
+        reject=args.reject,
+        reviewer_notes=args.reviewer_notes,
+        interactive=interactive,
+    )
+
+    if args.json:
+        print(json.dumps(result, indent=2, default=str))
+    else:
+        print(format_pipeline_summary(result))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
