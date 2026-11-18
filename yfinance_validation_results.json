@@ -1,0 +1,187 @@
+{
+  "JPY=X": {
+    "symbol": "JPY=X",
+    "available": true,
+    "has_15m": true,
+    "count_15m": 127,
+    "has_1d": true,
+    "count_1d": 5,
+    "chosen_interval": "15m",
+    "latest_candle": {
+      "timestamp": "2026-11-18 07:30:00+00:00",
+      "open": 159.21499633789062,
+      "high": 159.25,
+      "low": 159.11700439453125,
+      "close": 159.24200439453125,
+      "volume": 0.0
+    },
+    "metadata": {
+      "quoteType": "CURRENCY",
+      "exchange": "CCY",
+      "delayedBy": 0,
+      "marketState": "REGULAR",
+      "currency": "JPY",
+      "shortName": "USD/JPY",
+      "regularMarketPrice": 159.242
+    }
+  },
+  "^TNX": {
+    "symbol": "^TNX",
+    "available": true,
+    "has_15m": true,
+    "count_15m": 54,
+    "has_1d": true,
+    "count_1d": 5,
+    "chosen_interval": "15m",
+    "latest_candle": {
+      "timestamp": "2026-11-17 13:50:00-06:00",
+      "open": 5.098999977111816,
+      "high": 5.105000019073486,
+      "low": 5.098999977111816,
+      "close": 5.102999687194824,
+      "volume": 0.0
+    },
+    "metadata": {
+      "quoteType": "INDEX",
+      "exchange": "CGI",
+      "delayedBy": 15,
+      "marketState": "PREPRE",
+      "currency": "USD",
+      "shortName": "10-Year Bond",
+      "regularMarketPrice": 5.1029997
+    }
+  },
+  "^JB10YR": {
+    "symbol": "^JB10YR",
+    "available": false,
+    "has_15m": false,
+    "count_15m": 0,
+    "has_1d": false,
+    "count_1d": 0,
+    "chosen_interval": "none",
+    "latest_candle": {},
+    "metadata": {
+      "quoteType": null,
+      "exchange": null,
+      "delayedBy": null,
+      "marketState": null,
+      "currency": null,
+      "shortName": null,
+      "regularMarketPrice": null
+    },
+    "fallback_investigation": {
+      "status": "DELISTED_ON_YAHOO",
+      "alternative_source": {
+        "source": "Japan Ministry of Finance (mof.go.jp)",
+        "url": "https://www.mof.go.jp/jgbs/reference/interest_rate/jgbcm.csv",
+        "latest_date": "R8.11.17",
+        "jgb_10y_yield": 2.925,
+        "status": "SUCCESS"
+      }
+    }
+  },
+  "^GSPC": {
+    "symbol": "^GSPC",
+    "available": true,
+    "has_15m": true,
+    "count_15m": 52,
+    "has_1d": true,
+    "count_1d": 5,
+    "chosen_interval": "15m",
+    "latest_candle": {
+      "timestamp": "2026-11-17 15:45:00-05:00",
+      "open": 7328.7001953125,
+      "high": 7340.6298828125,
+      "low": 7312.990234375,
+      "close": 7340.6298828125,
+      "volume": 355785000.0
+    },
+    "metadata": {
+      "quoteType": "INDEX",
+      "exchange": "SNP",
+      "delayedBy": 0,
+      "marketState": "PREPRE",
+      "currency": "USD",
+      "shortName": "S&P 500",
+      "regularMarketPrice": 7340.53
+    }
+  },
+  "^N225": {
+    "symbol": "^N225",
+    "available": true,
+    "has_15m": true,
+    "count_15m": 46,
+    "has_1d": true,
+    "count_1d": 5,
+    "chosen_interval": "15m",
+    "latest_candle": {
+      "timestamp": "2026-11-18 15:15:00+09:00",
+      "open": 59120.69921875,
+      "high": 59207.7890625,
+      "low": 59059.03125,
+      "close": 59165.12890625,
+      "volume": 0.0
+    },
+    "metadata": {
+      "quoteType": "INDEX",
+      "exchange": "OSA",
+      "delayedBy": 20,
+      "marketState": "POSTPOST",
+      "currency": "JPY",
+      "shortName": "Nikkei 225",
+      "regularMarketPrice": 59024.28
+    }
+  },
+  "^VIX": {
+    "symbol": "^VIX",
+    "available": true,
+    "has_15m": true,
+    "count_15m": 104,
+    "has_1d": true,
+    "count_1d": 5,
+    "chosen_interval": "15m",
+    "latest_candle": {
+      "timestamp": "2026-11-17 15:00:00-06:00",
+      "open": 25.559999465942383,
+      "high": 25.59000015258789,
+      "low": 25.270000457763672,
+      "close": 25.450000762939453,
+      "volume": 0.0
+    },
+    "metadata": {
+      "quoteType": "INDEX",
+      "exchange": "CXI",
+      "delayedBy": 15,
+      "marketState": "PREPRE",
+      "currency": "USD",
+      "shortName": "CBOE Volatility Index",
+      "regularMarketPrice": 25.46
+    }
+  },
+  "GC=F": {
+    "symbol": "GC=F",
+    "available": true,
+    "has_15m": true,
+    "count_15m": 103,
+    "has_1d": true,
+    "count_1d": 4,
+    "chosen_interval": "15m",
+    "latest_candle": {
+      "timestamp": "2026-11-18 02:30:00-05:00",
+      "open": 3773.10009765625,
+      "high": 3774.60009765625,
+      "low": 3771.60009765625,
+      "close": 3772.39990234375,
+      "volume": 507.0
+    },
+    "metadata": {
+      "quoteType": "FUTURE",
+      "exchange": "CMX",
+      "delayedBy": 10,
+      "marketState": "REGULAR",
+      "currency": "USD",
+      "shortName": "Gold Dec 26",
+      "regularMarketPrice": 3772.4
+    }
+  }
+}
