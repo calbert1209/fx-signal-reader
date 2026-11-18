@@ -1,0 +1,361 @@
+{
+  "task_id": "P1-04",
+  "task_title": "Intervention Feed Curation",
+  "phase": "Phase 1: Data Source Mapping & API Setup",
+  "execution_utc": "2026-11-18T07:57:56Z",
+  "database_path": "fx_signals.db",
+  "benchmark_suite": {
+    "total_cases": 12,
+    "passed_cases": 12,
+    "accuracy_pct": 100.0,
+    "details": [
+      {
+        "test_id": "TC-01",
+        "headline": "Bank of Japan conducts rate check with commercial bank FX dealers as USD/JPY touches 160.20",
+        "expected_tier": 4,
+        "detected_tier": 4,
+        "severity": "CRITICAL",
+        "matched_keywords": "Bank of Japan, rate check",
+        "passed": true,
+        "missing_keywords": []
+      },
+      {
+        "test_id": "TC-02",
+        "headline": "Kanda warns Japan ready to take bold action against speculative yen moves",
+        "expected_tier": 4,
+        "detected_tier": 4,
+        "severity": "CRITICAL",
+        "matched_keywords": "Kanda, bold action, speculative moves",
+        "passed": true,
+        "missing_keywords": []
+      },
+      {
+        "test_id": "TC-03",
+        "headline": "Japan top currency diplomat Mimura says won't rule out any options to counter excessive volatility",
+        "expected_tier": 4,
+        "detected_tier": 4,
+        "severity": "CRITICAL",
+        "matched_keywords": "Mimura, currency diplomat, not rule out any options, excessive volatility",
+        "passed": true,
+        "missing_keywords": []
+      },
+      {
+        "test_id": "TC-04",
+        "headline": "Japan stands ready to take appropriate steps on disorderly FX market with tense sense of urgency",
+        "expected_tier": 3,
+        "detected_tier": 3,
+        "severity": "HIGH",
+        "matched_keywords": "tense sense of urgency, disorderly, stand ready, take appropriate steps",
+        "passed": true,
+        "missing_keywords": []
+      },
+      {
+        "test_id": "TC-05",
+        "headline": "Finance Minister Kato says government cannot tolerate excessive volatility in foreign exchange",
+        "expected_tier": 3,
+        "detected_tier": 3,
+        "severity": "HIGH",
+        "matched_keywords": "Kato, excessive volatility, cannot tolerate",
+        "passed": true,
+        "missing_keywords": []
+      },
+      {
+        "test_id": "TC-06",
+        "headline": "MoF's Mimura warns one-sided rapid currency movements undesirable",
+        "expected_tier": 2,
+        "detected_tier": 2,
+        "severity": "MEDIUM",
+        "matched_keywords": "MoF, Mimura, rapid moves, one-sided",
+        "passed": true,
+        "missing_keywords": []
+      },
+      {
+        "test_id": "TC-07",
+        "headline": "BoJ closely monitoring speculative trading not reflecting fundamentals with heightened vigilance",
+        "expected_tier": 2,
+        "detected_tier": 2,
+        "severity": "MEDIUM",
+        "matched_keywords": "BoJ, speculative moves, not reflecting fundamentals, heightened vigilance, reflecting fundamentals",
+        "passed": true,
+        "missing_keywords": []
+      },
+      {
+        "test_id": "TC-08",
+        "headline": "Suzuki says watching FX moves carefully, desirable for currencies to move stably reflecting fundamentals",
+        "expected_tier": 1,
+        "detected_tier": 1,
+        "severity": "LOW",
+        "matched_keywords": "Suzuki, watching closely, move stably, reflecting fundamentals",
+        "passed": true,
+        "missing_keywords": []
+      },
+      {
+        "test_id": "TC-09",
+        "headline": "神田財務官は為替市場で過度な変動があれば断固たる措置をとると表明",
+        "expected_tier": 4,
+        "detected_tier": 4,
+        "severity": "CRITICAL",
+        "matched_keywords": "神田 (Kanda), 財務官 (Vice Minister for Int'l Affairs), 断固たる措置 (decisive action), 過度な変動 (excessive volatility)",
+        "passed": true,
+        "missing_keywords": []
+      },
+      {
+        "test_id": "TC-10",
+        "headline": "三村財務官、為替相場における急激な変動や投機的な動きに極めて高い緊張感を持って注視",
+        "expected_tier": 3,
+        "detected_tier": 3,
+        "severity": "HIGH",
+        "matched_keywords": "三村 (Mimura), 財務官 (Vice Minister for Int'l Affairs), 極めて高い緊張感 (extreme sense of urgency), 急激な変動 (rapid moves), 投機的な動き (speculative moves), 緊張感を持って注視 (watching with sense of urgency), 注視 (watching)",
+        "passed": true,
+        "missing_keywords": []
+      },
+      {
+        "test_id": "TC-11",
+        "headline": "Bank of Japan releases summary of opinions from October monetary policy meeting",
+        "expected_tier": 0,
+        "detected_tier": 0,
+        "severity": "NONE",
+        "matched_keywords": "Bank of Japan",
+        "passed": true,
+        "missing_keywords": []
+      },
+      {
+        "test_id": "TC-12",
+        "headline": "US S&P 500 rallies 1.2% as tech earnings beat Wall Street estimates",
+        "expected_tier": 0,
+        "detected_tier": 0,
+        "severity": "NONE",
+        "matched_keywords": "",
+        "passed": true,
+        "missing_keywords": []
+      }
+    ]
+  },
+  "feed_health_matrix": [
+    {
+      "id": "boj_en_whatsnew",
+      "name": "Bank of Japan Releases (English)",
+      "url": "https://www.boj.or.jp/en/rss/whatsnew.xml",
+      "source": null,
+      "status": "ACTIVE (HTTP 200)",
+      "latency_sec": 0.425,
+      "items_parsed": 45,
+      "error": null
+    },
+    {
+      "id": "boj_ja_whatsnew",
+      "name": "Bank of Japan Releases (Japanese)",
+      "url": "https://www.boj.or.jp/rss/whatsnew.xml",
+      "source": null,
+      "status": "ACTIVE (HTTP 200)",
+      "latency_sec": 0.082,
+      "items_parsed": 71,
+      "error": null
+    },
+    {
+      "id": "fxstreet_news",
+      "name": "FXStreet Breaking News",
+      "url": "https://www.fxstreet.com/rss/news",
+      "source": null,
+      "status": "ACTIVE (HTTP 200)",
+      "latency_sec": 0.25,
+      "items_parsed": 30,
+      "error": null
+    },
+    {
+      "id": "investing_forex",
+      "name": "Investing.com Forex News",
+      "url": "https://www.investing.com/rss/forex.rss",
+      "source": null,
+      "status": "ACTIVE (HTTP 200)",
+      "latency_sec": 0.509,
+      "items_parsed": 10,
+      "error": null
+    },
+    {
+      "id": "marketwatch_realtime",
+      "name": "MarketWatch Real-Time MarketPulse",
+      "url": "https://feeds.content.dowjones.io/public/rss/mw_realtimeheadlines",
+      "source": null,
+      "status": "ACTIVE (HTTP 200)",
+      "latency_sec": 0.372,
+      "items_parsed": 10,
+      "error": null
+    },
+    {
+      "id": "nikkei_asia_nar",
+      "name": "Nikkei Asia Primary Wire",
+      "url": "https://asia.nikkei.com/rss/feed/nar",
+      "source": null,
+      "status": "ACTIVE (HTTP 200)",
+      "latency_sec": 0.127,
+      "items_parsed": 50,
+      "error": null
+    },
+    {
+      "id": "google_news_usdjpy",
+      "name": "Google News USD/JPY & FX Wire",
+      "url": "https://news.google.com/rss/search?q=USDJPY+OR+%22USD/JPY%22+OR+%22yen+intervention%22&hl=en-US&gl=US&ceid=US:en",
+      "source": null,
+      "status": "ACTIVE (HTTP 200)",
+      "latency_sec": 0.051,
+      "items_parsed": 100,
+      "error": null
+    },
+    {
+      "id": "google_news_mof_boj",
+      "name": "Google News MoF / BoJ Intervention Alert",
+      "url": "https://news.google.com/rss/search?q=%22Bank+of+Japan%22+OR+%22Ministry+of+Finance%22+yen+intervention&hl=en-US&gl=US&ceid=US:en",
+      "source": null,
+      "status": "ACTIVE (HTTP 200)",
+      "latency_sec": 0.062,
+      "items_parsed": 45,
+      "error": null
+    },
+    {
+      "id": "google_news_reuters_yen",
+      "name": "Reuters Yen & FX Wire (via Google News)",
+      "url": "https://news.google.com/rss/search?q=site:reuters.com+yen+intervention&hl=en-US&gl=US&ceid=US:en",
+      "source": null,
+      "status": "ACTIVE (HTTP 200)",
+      "latency_sec": 0.057,
+      "items_parsed": 73,
+      "error": null
+    },
+    {
+      "id": "mof_whatsnew_html",
+      "name": "Ministry of Finance Official Releases",
+      "url": "https://www.mof.go.jp/english/public_relations/whats_new/202611.html",
+      "source": null,
+      "status": "ACTIVE (HTTP 200)",
+      "latency_sec": 0.195,
+      "items_parsed": 34,
+      "error": null
+    }
+  ],
+  "database_metrics": {
+    "total_headlines_ingested": 458,
+    "flagged_intervention_headlines": 151,
+    "tier_distribution": {
+      "0": 349,
+      "1": 0,
+      "2": 0,
+      "3": 112,
+      "4": 7
+    },
+    "source_distribution": {
+      "Bank of Japan": 116,
+      "Reuters": 79,
+      "Nikkei Asia": 50,
+      "FXStreet": 41,
+      "Ministry of Finance Japan": 34,
+      "FOREX.com": 15,
+      "Forex Factory": 13,
+      "Investing.com": 11,
+      "MarketWatch": 10,
+      "CNBC": 10,
+      "StoneX": 9,
+      "FXEmpire": 6,
+      "Continuum Economics": 5,
+      "www.tmgm.com": 4,
+      "investingLive": 3,
+      "The Japan Times": 3,
+      "IG": 3,
+      "BigGo Finance": 3,
+      "ing think": 2,
+      "Yahoo Finance": 2,
+      "WSJ": 2,
+      "The Real Economy Blog": 2,
+      "MUFG Research": 2,
+      "LiteFinance": 2,
+      "Financial Times": 2,
+      "Daily Forex": 2,
+      "Convera": 2,
+      "CME Group": 2,
+      "Axios": 2,
+      "朝日新聞": 1,
+      "equiti.com": 1,
+      "XTB.com": 1,
+      "TradingView": 1,
+      "Traders Union": 1,
+      "The Standard (HK)": 1,
+      "The Business Times": 1,
+      "S&P Global": 1,
+      "OMFIF": 1,
+      "Newsquawk": 1,
+      "Morgan Stanley": 1,
+      "MLQ.ai": 1,
+      "LSEG": 1,
+      "Investopedia": 1,
+      "Gulf Times": 1,
+      "Equiti Global": 1,
+      "CMC Markets": 1,
+      "Bloomberg.com": 1,
+      "BBC": 1,
+      "Al Jazeera": 1,
+      "24/7 Wall St.": 1
+    }
+  },
+  "sample_flagged_headlines": [
+    {
+      "published_utc": "2026-11-18T01:10:27Z",
+      "source": "Traders Union",
+      "title": "Japan yen intervention risk rises as AI-linked stock inflows drive hedging pressure - Traders Union",
+      "matched_keywords": "intervention risk/watch, intervention"
+    },
+    {
+      "published_utc": "2026-11-18T00:56:07Z",
+      "source": "FXStreet",
+      "title": "Japanese Yen softens after BoJ Ueda’s remarks, FOMC Minutes in focus",
+      "matched_keywords": "BoJ, Ueda"
+    },
+    {
+      "published_utc": "2026-11-18T00:00:00Z",
+      "source": "Ministry of Finance Japan",
+      "title": "ITN\nForeign Exchange Intervention Operations (July - September 2026)",
+      "matched_keywords": "intervention operations, intervention"
+    },
+    {
+      "published_utc": "2026-11-17T20:35:00Z",
+      "source": "BigGo Finance",
+      "title": "Yen Intervention Watch Persists Just Below 160; Dollar Rally Pauses, Euro Hits 1-Year-7-Month Low - BigGo Finance",
+      "matched_keywords": "intervention risk/watch, intervention"
+    },
+    {
+      "published_utc": "2026-11-17T11:42:08Z",
+      "source": "LiteFinance",
+      "title": "BoJ Tightening Bets Put Japanese Yen Back in Play. Forecast as of 17.11.2026 - LiteFinance",
+      "matched_keywords": "BoJ"
+    },
+    {
+      "published_utc": "2026-11-17T10:04:00Z",
+      "source": "Forex Factory",
+      "title": "USD/JPY: Dollar Bulls Eye Breakout Despite Intervention Risk - Forex Factory",
+      "matched_keywords": "intervention risk/watch, intervention"
+    },
+    {
+      "published_utc": "2026-11-17T08:22:00Z",
+      "source": "Investing.com",
+      "title": "USD/JPY: Intervention Risk Comes to the Fore",
+      "matched_keywords": "intervention risk/watch, intervention"
+    },
+    {
+      "published_utc": "2026-11-17T08:19:33Z",
+      "source": "FXStreet",
+      "title": "USD/JPY: Intervention risk comes to the fore - FXStreet",
+      "matched_keywords": "intervention risk/watch, intervention"
+    },
+    {
+      "published_utc": "2026-11-17T01:35:00Z",
+      "source": "BigGo Finance",
+      "title": "Tokyo Yen Hovers in Lower 159 Range as Intervention Caution Battles Higher US Rates; Market Awaits Nvidia Earnings - BigGo Finance",
+      "matched_keywords": "intervention"
+    },
+    {
+      "published_utc": "2026-11-16T21:00:00Z",
+      "source": "Gulf Times",
+      "title": "Yen could weaken into danger zone for intervention | Gulf Times - Gulf Times",
+      "matched_keywords": "intervention"
+    }
+  ]
+}

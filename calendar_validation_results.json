@@ -1,0 +1,818 @@
+{
+  "execution_timestamp_utc": "2026-11-18T07:55:49Z",
+  "fetch_metadata": {
+    "fetched_at_utc": "2026-11-18T07:55:49Z",
+    "primary_url": "https://nfs.faireconomy.media/ff_calendar_thisweek.json",
+    "source_used": "json_live",
+    "status_code": 200,
+    "rate_limited": false,
+    "retry_after_seconds": null
+  },
+  "feed_statistics": {
+    "total_feed_events": 125,
+    "total_usd_jpy_events": 53,
+    "usd_events": 46,
+    "jpy_events": 7,
+    "impact_breakdown_usd_jpy": {
+      "Low": 45,
+      "High": 4,
+      "Medium": 4
+    },
+    "all_currencies_breakdown": {
+      "NZD": 11,
+      "JPY": 7,
+      "GBP": 17,
+      "CNY": 9,
+      "EUR": 16,
+      "USD": 46,
+      "CAD": 13,
+      "AUD": 6
+    }
+  },
+  "sqlite_verification": {
+    "total_rows_inserted": 53,
+    "deduplication_verified": true,
+    "high_impact_usd_count": 4,
+    "high_impact_usd_sample": [
+      {
+        "event_hash": "113d58d096fc94f71b5c7aae9695045c",
+        "timestamp_utc": "2026-11-16T17:00:00Z",
+        "currency": "USD",
+        "title": "Fed Chairman Warsh Speaks",
+        "impact": "High",
+        "forecast": null,
+        "previous": null
+      },
+      {
+        "event_hash": "5ffb1b3465405a57aa750e037611f623",
+        "timestamp_utc": "2026-11-17T13:30:00Z",
+        "currency": "USD",
+        "title": "Core Retail Sales m/m",
+        "impact": "High",
+        "forecast": "0.4%",
+        "previous": "0.9%"
+      },
+      {
+        "event_hash": "b9db017c0093b202bda37b7d4b4534ab",
+        "timestamp_utc": "2026-11-17T13:30:00Z",
+        "currency": "USD",
+        "title": "Retail Sales m/m",
+        "impact": "High",
+        "forecast": "0.1%",
+        "previous": "0.8%"
+      },
+      {
+        "event_hash": "7b560977a68296d01d747584516aa073",
+        "timestamp_utc": "2026-11-18T19:00:00Z",
+        "currency": "USD",
+        "title": "FOMC Meeting Minutes",
+        "impact": "High",
+        "forecast": null,
+        "previous": null
+      }
+    ],
+    "jpy_events_count": 7,
+    "jpy_events_sample": [
+      {
+        "event_hash": "1b82a5ded2b0a70de3a48e40ce604fbf",
+        "timestamp_utc": "2026-11-15T23:50:00Z",
+        "currency": "JPY",
+        "title": "Prelim GDP Price Index y/y",
+        "impact": "Low",
+        "forecast": "2.6%",
+        "previous": "2.6%"
+      },
+      {
+        "event_hash": "58a152734c6118a677df6c0014a16ef3",
+        "timestamp_utc": "2026-11-15T23:50:00Z",
+        "currency": "JPY",
+        "title": "Prelim GDP q/q",
+        "impact": "Low",
+        "forecast": "0.1%",
+        "previous": "0.3%"
+      },
+      {
+        "event_hash": "b90f10536c8cfc33edb9038526861c5f",
+        "timestamp_utc": "2026-11-16T04:30:00Z",
+        "currency": "JPY",
+        "title": "Revised Industrial Production m/m",
+        "impact": "Low",
+        "forecast": "2.2%",
+        "previous": "2.2%"
+      },
+      {
+        "event_hash": "daaf05a04fc341affb320cd0e66f6f94",
+        "timestamp_utc": "2026-11-17T04:30:00Z",
+        "currency": "JPY",
+        "title": "Tertiary Industry Activity m/m",
+        "impact": "Low",
+        "forecast": "0.1%",
+        "previous": "-0.1%"
+      },
+      {
+        "event_hash": "157fa831e50480b7297d9226f128c825",
+        "timestamp_utc": "2026-11-17T23:50:00Z",
+        "currency": "JPY",
+        "title": "Trade Balance",
+        "impact": "Low",
+        "forecast": "-0.90T",
+        "previous": "-0.70T"
+      }
+    ]
+  },
+  "field_mapping_spec": {
+    "event_hash": {
+      "source_fields": [
+        "date (normalized UTC)",
+        "country (currency)",
+        "title"
+      ],
+      "transformation": "sha256('{timestamp_utc}:{currency}:{title}').hexdigest()[:32]",
+      "sqlite_type": "TEXT PRIMARY KEY",
+      "description": "Deterministic 32-char hex digest preventing duplicate event entries."
+    },
+    "timestamp_utc": {
+      "source_fields": [
+        "date"
+      ],
+      "transformation": "datetime.fromisoformat(date).astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')",
+      "sqlite_type": "TEXT NOT NULL",
+      "description": "Normalized ISO-8601 UTC timestamp string."
+    },
+    "currency": {
+      "source_fields": [
+        "country"
+      ],
+      "transformation": "country.strip().upper() (filtered to 'USD' and 'JPY')",
+      "sqlite_type": "TEXT NOT NULL",
+      "description": "Three-letter ISO currency code."
+    },
+    "title": {
+      "source_fields": [
+        "title"
+      ],
+      "transformation": "title.strip()",
+      "sqlite_type": "TEXT NOT NULL",
+      "description": "Official economic indicator or release name."
+    },
+    "impact": {
+      "source_fields": [
+        "impact"
+      ],
+      "transformation": "Normalized to 'High', 'Medium', 'Low', or 'Non-Economic'",
+      "sqlite_type": "TEXT",
+      "description": "Market impact rating."
+    },
+    "forecast": {
+      "source_fields": [
+        "forecast"
+      ],
+      "transformation": "String value or NULL if empty/omitted",
+      "sqlite_type": "TEXT",
+      "description": "Consensus market forecast estimate."
+    },
+    "previous": {
+      "source_fields": [
+        "previous"
+      ],
+      "transformation": "String value or NULL if empty/omitted",
+      "sqlite_type": "TEXT",
+      "description": "Prior period published value."
+    },
+    "actual": {
+      "source_fields": [
+        "actual"
+      ],
+      "transformation": "String value or NULL if omitted or pending release",
+      "sqlite_type": "TEXT",
+      "description": "Actual published figure once released."
+    }
+  },
+  "sample_raw_events": [
+    {
+      "title": "BusinessNZ Services Index",
+      "country": "NZD",
+      "date": "2026-11-15T16:30:00-05:00",
+      "impact": "Low",
+      "forecast": "",
+      "previous": "50.9"
+    },
+    {
+      "title": "Prelim GDP Price Index y/y",
+      "country": "JPY",
+      "date": "2026-11-15T18:50:00-05:00",
+      "impact": "Low",
+      "forecast": "2.6%",
+      "previous": "2.6%"
+    },
+    {
+      "title": "Prelim GDP q/q",
+      "country": "JPY",
+      "date": "2026-11-15T18:50:00-05:00",
+      "impact": "Low",
+      "forecast": "0.1%",
+      "previous": "0.3%"
+    },
+    {
+      "title": "Rightmove HPI m/m",
+      "country": "GBP",
+      "date": "2026-11-15T19:01:00-05:00",
+      "impact": "Low",
+      "forecast": "",
+      "previous": "1.0%"
+    },
+    {
+      "title": "New Home Prices m/m",
+      "country": "CNY",
+      "date": "2026-11-15T20:30:00-05:00",
+      "impact": "Low",
+      "forecast": "",
+      "previous": "-0.14%"
+    }
+  ],
+  "mapped_events_usd_jpy": [
+    {
+      "event_hash": "1b82a5ded2b0a70de3a48e40ce604fbf",
+      "timestamp_utc": "2026-11-15T23:50:00Z",
+      "currency": "JPY",
+      "title": "Prelim GDP Price Index y/y",
+      "impact": "Low",
+      "forecast": "2.6%",
+      "previous": "2.6%",
+      "actual": null,
+      "raw_date_input": "2026-11-15T18:50:00-05:00"
+    },
+    {
+      "event_hash": "58a152734c6118a677df6c0014a16ef3",
+      "timestamp_utc": "2026-11-15T23:50:00Z",
+      "currency": "JPY",
+      "title": "Prelim GDP q/q",
+      "impact": "Low",
+      "forecast": "0.1%",
+      "previous": "0.3%",
+      "actual": null,
+      "raw_date_input": "2026-11-15T18:50:00-05:00"
+    },
+    {
+      "event_hash": "b90f10536c8cfc33edb9038526861c5f",
+      "timestamp_utc": "2026-11-16T04:30:00Z",
+      "currency": "JPY",
+      "title": "Revised Industrial Production m/m",
+      "impact": "Low",
+      "forecast": "2.2%",
+      "previous": "2.2%",
+      "actual": null,
+      "raw_date_input": "2026-11-15T23:30:00-05:00"
+    },
+    {
+      "event_hash": "21e6a3c2bfdcec24f6d4c621ed3eadac",
+      "timestamp_utc": "2026-11-16T10:00:00Z",
+      "currency": "USD",
+      "title": "FOMC Member Barr Speaks",
+      "impact": "Low",
+      "forecast": null,
+      "previous": null,
+      "actual": null,
+      "raw_date_input": "2026-11-16T05:00:00-05:00"
+    },
+    {
+      "event_hash": "d42bc069d5d343b69ae3c3a092077af4",
+      "timestamp_utc": "2026-11-16T13:30:00Z",
+      "currency": "USD",
+      "title": "Empire State Manufacturing Index",
+      "impact": "Low",
+      "forecast": "17.6",
+      "previous": "25.5",
+      "actual": null,
+      "raw_date_input": "2026-11-16T08:30:00-05:00"
+    },
+    {
+      "event_hash": "15d7a720ead01db9e1b4cc0d18991753",
+      "timestamp_utc": "2026-11-16T14:05:00Z",
+      "currency": "USD",
+      "title": "FOMC Member Williams Speaks",
+      "impact": "Low",
+      "forecast": null,
+      "previous": null,
+      "actual": null,
+      "raw_date_input": "2026-11-16T09:05:00-05:00"
+    },
+    {
+      "event_hash": "7120abb28fce0a17f44ae49f123efbbe",
+      "timestamp_utc": "2026-11-16T14:45:00Z",
+      "currency": "USD",
+      "title": "Cleveland Fed Inflation Expectations",
+      "impact": "Low",
+      "forecast": null,
+      "previous": "3.3%",
+      "actual": null,
+      "raw_date_input": "2026-11-16T09:45:00-05:00"
+    },
+    {
+      "event_hash": "113d58d096fc94f71b5c7aae9695045c",
+      "timestamp_utc": "2026-11-16T17:00:00Z",
+      "currency": "USD",
+      "title": "Fed Chairman Warsh Speaks",
+      "impact": "High",
+      "forecast": null,
+      "previous": null,
+      "actual": null,
+      "raw_date_input": "2026-11-16T12:00:00-05:00"
+    },
+    {
+      "event_hash": "dbc81f9e87e001ab9c8de1620fdd2f8e",
+      "timestamp_utc": "2026-11-16T19:15:00Z",
+      "currency": "USD",
+      "title": "FOMC Member Hammack Speaks",
+      "impact": "Low",
+      "forecast": null,
+      "previous": null,
+      "actual": null,
+      "raw_date_input": "2026-11-16T14:15:00-05:00"
+    },
+    {
+      "event_hash": "c19b23e89fa2416b0abc821aa292bf9c",
+      "timestamp_utc": "2026-11-16T23:10:00Z",
+      "currency": "USD",
+      "title": "FOMC Member Barkin Speaks",
+      "impact": "Low",
+      "forecast": null,
+      "previous": null,
+      "actual": null,
+      "raw_date_input": "2026-11-16T18:10:00-05:00"
+    },
+    {
+      "event_hash": "004027eb10011713529eb1d4ba8bdf27",
+      "timestamp_utc": "2026-11-16T23:30:00Z",
+      "currency": "USD",
+      "title": "FOMC Member Goolsbee Speaks",
+      "impact": "Low",
+      "forecast": null,
+      "previous": null,
+      "actual": null,
+      "raw_date_input": "2026-11-16T18:30:00-05:00"
+    },
+    {
+      "event_hash": "daaf05a04fc341affb320cd0e66f6f94",
+      "timestamp_utc": "2026-11-17T04:30:00Z",
+      "currency": "JPY",
+      "title": "Tertiary Industry Activity m/m",
+      "impact": "Low",
+      "forecast": "0.1%",
+      "previous": "-0.1%",
+      "actual": null,
+      "raw_date_input": "2026-11-16T23:30:00-05:00"
+    },
+    {
+      "event_hash": "029ff5fb479283d81d83dca4499c521a",
+      "timestamp_utc": "2026-11-17T12:30:00Z",
+      "currency": "USD",
+      "title": "FOMC Member Musalem Speaks",
+      "impact": "Low",
+      "forecast": null,
+      "previous": null,
+      "actual": null,
+      "raw_date_input": "2026-11-17T07:30:00-05:00"
+    },
+    {
+      "event_hash": "84c5fd303fd3f5f657f2fd658a612e3d",
+      "timestamp_utc": "2026-11-17T13:15:00Z",
+      "currency": "USD",
+      "title": "ADP Weekly Employment Change",
+      "impact": "Low",
+      "forecast": null,
+      "previous": "19.8K",
+      "actual": null,
+      "raw_date_input": "2026-11-17T08:15:00-05:00"
+    },
+    {
+      "event_hash": "5ffb1b3465405a57aa750e037611f623",
+      "timestamp_utc": "2026-11-17T13:30:00Z",
+      "currency": "USD",
+      "title": "Core Retail Sales m/m",
+      "impact": "High",
+      "forecast": "0.4%",
+      "previous": "0.9%",
+      "actual": null,
+      "raw_date_input": "2026-11-17T08:30:00-05:00"
+    },
+    {
+      "event_hash": "b28fb6c4ddc8dc0d38ffc2479944703a",
+      "timestamp_utc": "2026-11-17T13:30:00Z",
+      "currency": "USD",
+      "title": "Import Prices m/m",
+      "impact": "Low",
+      "forecast": "0.7%",
+      "previous": "1.1%",
+      "actual": null,
+      "raw_date_input": "2026-11-17T08:30:00-05:00"
+    },
+    {
+      "event_hash": "b9db017c0093b202bda37b7d4b4534ab",
+      "timestamp_utc": "2026-11-17T13:30:00Z",
+      "currency": "USD",
+      "title": "Retail Sales m/m",
+      "impact": "High",
+      "forecast": "0.1%",
+      "previous": "0.8%",
+      "actual": null,
+      "raw_date_input": "2026-11-17T08:30:00-05:00"
+    },
+    {
+      "event_hash": "15b8d3afcd4a25dc631ba80853f7599e",
+      "timestamp_utc": "2026-11-17T14:10:00Z",
+      "currency": "USD",
+      "title": "FOMC Member Waller Speaks",
+      "impact": "Low",
+      "forecast": null,
+      "previous": null,
+      "actual": null,
+      "raw_date_input": "2026-11-17T09:10:00-05:00"
+    },
+    {
+      "event_hash": "8b3d2116c7ef67a20f4647b1a4745ede",
+      "timestamp_utc": "2026-11-17T14:15:00Z",
+      "currency": "USD",
+      "title": "Capacity Utilization Rate",
+      "impact": "Low",
+      "forecast": "76.8%",
+      "previous": "76.9%",
+      "actual": null,
+      "raw_date_input": "2026-11-17T09:15:00-05:00"
+    },
+    {
+      "event_hash": "7a327349debcb6bc4f66a671ff1ef582",
+      "timestamp_utc": "2026-11-17T14:15:00Z",
+      "currency": "USD",
+      "title": "Industrial Production m/m",
+      "impact": "Low",
+      "forecast": "0.0%",
+      "previous": "0.7%",
+      "actual": null,
+      "raw_date_input": "2026-11-17T09:15:00-05:00"
+    },
+    {
+      "event_hash": "97b82715157d933d5e2976b3634af454",
+      "timestamp_utc": "2026-11-17T14:30:00Z",
+      "currency": "USD",
+      "title": "FOMC Member Hammack Speaks",
+      "impact": "Low",
+      "forecast": null,
+      "previous": null,
+      "actual": null,
+      "raw_date_input": "2026-11-17T09:30:00-05:00"
+    },
+    {
+      "event_hash": "fade54e4460b50b9d2084a07d5f22d51",
+      "timestamp_utc": "2026-11-17T15:00:00Z",
+      "currency": "USD",
+      "title": "Business Inventories m/m",
+      "impact": "Low",
+      "forecast": "0.5%",
+      "previous": "0.4%",
+      "actual": null,
+      "raw_date_input": "2026-11-17T10:00:00-05:00"
+    },
+    {
+      "event_hash": "ea4ef8c3a104b78d2cb62dc9eb03951d",
+      "timestamp_utc": "2026-11-17T15:00:00Z",
+      "currency": "USD",
+      "title": "NAHB Housing Market Index",
+      "impact": "Low",
+      "forecast": "29",
+      "previous": "29",
+      "actual": null,
+      "raw_date_input": "2026-11-17T10:00:00-05:00"
+    },
+    {
+      "event_hash": "0f7b2f74a2332ae3bee0c14d2f1837bc",
+      "timestamp_utc": "2026-11-17T19:25:00Z",
+      "currency": "USD",
+      "title": "FOMC Member Williams Speaks",
+      "impact": "Low",
+      "forecast": null,
+      "previous": null,
+      "actual": null,
+      "raw_date_input": "2026-11-17T14:25:00-05:00"
+    },
+    {
+      "event_hash": "a2cea1bff9e59e9c1997c0a468cc1c69",
+      "timestamp_utc": "2026-11-17T21:30:00Z",
+      "currency": "USD",
+      "title": "API Weekly Statistical Bulletin",
+      "impact": "Low",
+      "forecast": null,
+      "previous": null,
+      "actual": null,
+      "raw_date_input": "2026-11-17T16:30:00-05:00"
+    },
+    {
+      "event_hash": "157fa831e50480b7297d9226f128c825",
+      "timestamp_utc": "2026-11-17T23:50:00Z",
+      "currency": "JPY",
+      "title": "Trade Balance",
+      "impact": "Low",
+      "forecast": "-0.90T",
+      "previous": "-0.70T",
+      "actual": null,
+      "raw_date_input": "2026-11-17T18:50:00-05:00"
+    },
+    {
+      "event_hash": "1ec605b047fbb349ceff692d38f8ddbc",
+      "timestamp_utc": "2026-11-18T13:30:00Z",
+      "currency": "USD",
+      "title": "Building Permits",
+      "impact": "Low",
+      "forecast": "1.38M",
+      "previous": "1.40M",
+      "actual": null,
+      "raw_date_input": "2026-11-18T08:30:00-05:00"
+    },
+    {
+      "event_hash": "12d8fbf32b28ab4991f06fb41b51d1e1",
+      "timestamp_utc": "2026-11-18T13:30:00Z",
+      "currency": "USD",
+      "title": "Housing Starts",
+      "impact": "Low",
+      "forecast": "1.25M",
+      "previous": "1.22M",
+      "actual": null,
+      "raw_date_input": "2026-11-18T08:30:00-05:00"
+    },
+    {
+      "event_hash": "d15468370e23253c8a8fc51fc4c0316c",
+      "timestamp_utc": "2026-11-18T15:00:00Z",
+      "currency": "USD",
+      "title": "Pending Home Sales m/m",
+      "impact": "Low",
+      "forecast": "-2.0%",
+      "previous": "-7.3%",
+      "actual": null,
+      "raw_date_input": "2026-11-18T10:00:00-05:00"
+    },
+    {
+      "event_hash": "6a67608a48e7fcaf3522e5ff43c10b96",
+      "timestamp_utc": "2026-11-18T15:30:00Z",
+      "currency": "USD",
+      "title": "Crude Oil Inventories",
+      "impact": "Low",
+      "forecast": "0.4M",
+      "previous": "4.7M",
+      "actual": null,
+      "raw_date_input": "2026-11-18T10:30:00-05:00"
+    },
+    {
+      "event_hash": "a4e7de220972f273c81ef13ae964363c",
+      "timestamp_utc": "2026-11-18T17:15:00Z",
+      "currency": "USD",
+      "title": "FOMC Member Daly Speaks",
+      "impact": "Low",
+      "forecast": null,
+      "previous": null,
+      "actual": null,
+      "raw_date_input": "2026-11-18T12:15:00-05:00"
+    },
+    {
+      "event_hash": "3e9cd03fca4d3f9895d0ae258e671a73",
+      "timestamp_utc": "2026-11-18T18:35:00Z",
+      "currency": "USD",
+      "title": "FOMC Member Barr Speaks",
+      "impact": "Low",
+      "forecast": null,
+      "previous": null,
+      "actual": null,
+      "raw_date_input": "2026-11-18T13:35:00-05:00"
+    },
+    {
+      "event_hash": "7b560977a68296d01d747584516aa073",
+      "timestamp_utc": "2026-11-18T19:00:00Z",
+      "currency": "USD",
+      "title": "FOMC Meeting Minutes",
+      "impact": "High",
+      "forecast": null,
+      "previous": null,
+      "actual": null,
+      "raw_date_input": "2026-11-18T14:00:00-05:00"
+    },
+    {
+      "event_hash": "1e9edf454c6e6067eac204d75cd379b0",
+      "timestamp_utc": "2026-11-18T19:30:00Z",
+      "currency": "USD",
+      "title": "FOMC Member Williams Speaks",
+      "impact": "Low",
+      "forecast": null,
+      "previous": null,
+      "actual": null,
+      "raw_date_input": "2026-11-18T14:30:00-05:00"
+    },
+    {
+      "event_hash": "9c5868e7f5f396d4f42a5bfd3da74c16",
+      "timestamp_utc": "2026-11-18T21:00:00Z",
+      "currency": "USD",
+      "title": "TIC Long-Term Purchases",
+      "impact": "Low",
+      "forecast": "160.7B",
+      "previous": "279.2B",
+      "actual": null,
+      "raw_date_input": "2026-11-18T16:00:00-05:00"
+    },
+    {
+      "event_hash": "024f61f238e2aaa222bdf3890e84ec4a",
+      "timestamp_utc": "2026-11-18T21:15:00Z",
+      "currency": "USD",
+      "title": "FOMC Member Kashkari Speaks",
+      "impact": "Low",
+      "forecast": null,
+      "previous": null,
+      "actual": null,
+      "raw_date_input": "2026-11-18T16:15:00-05:00"
+    },
+    {
+      "event_hash": "c99c3a0490a2c9e682f6c34fbb5acbdf",
+      "timestamp_utc": "2026-11-18T23:50:00Z",
+      "currency": "JPY",
+      "title": "Core Machinery Orders m/m",
+      "impact": "Low",
+      "forecast": "1.3%",
+      "previous": "5.2%",
+      "actual": null,
+      "raw_date_input": "2026-11-18T18:50:00-05:00"
+    },
+    {
+      "event_hash": "38534964f0ff20836c0d51cf1581abb5",
+      "timestamp_utc": "2026-11-19T13:30:00Z",
+      "currency": "USD",
+      "title": "Philly Fed Manufacturing Index",
+      "impact": "Medium",
+      "forecast": "20.6",
+      "previous": "20.9",
+      "actual": null,
+      "raw_date_input": "2026-11-19T08:30:00-05:00"
+    },
+    {
+      "event_hash": "1b77b916b7a07291bc966203986774a1",
+      "timestamp_utc": "2026-11-19T13:30:00Z",
+      "currency": "USD",
+      "title": "Unemployment Claims",
+      "impact": "Medium",
+      "forecast": "198K",
+      "previous": "200K",
+      "actual": null,
+      "raw_date_input": "2026-11-19T08:30:00-05:00"
+    },
+    {
+      "event_hash": "4f40f812e5663c4b5a76d044c43680cf",
+      "timestamp_utc": "2026-11-19T13:50:00Z",
+      "currency": "USD",
+      "title": "FOMC Member Hammack Speaks",
+      "impact": "Low",
+      "forecast": null,
+      "previous": null,
+      "actual": null,
+      "raw_date_input": "2026-11-19T08:50:00-05:00"
+    },
+    {
+      "event_hash": "855a8ef4de0f2d54cde2734d799d9ab3",
+      "timestamp_utc": "2026-11-19T14:25:00Z",
+      "currency": "USD",
+      "title": "FOMC Member Jefferson Speaks",
+      "impact": "Low",
+      "forecast": null,
+      "previous": null,
+      "actual": null,
+      "raw_date_input": "2026-11-19T09:25:00-05:00"
+    },
+    {
+      "event_hash": "4676061e0074b7c9727576ceaa50df82",
+      "timestamp_utc": "2026-11-19T15:00:00Z",
+      "currency": "USD",
+      "title": "CB Leading Index m/m",
+      "impact": "Low",
+      "forecast": "0.0%",
+      "previous": "0.0%",
+      "actual": null,
+      "raw_date_input": "2026-11-19T10:00:00-05:00"
+    },
+    {
+      "event_hash": "8595160b4e2878ef715370ce15a4004a",
+      "timestamp_utc": "2026-11-19T15:15:00Z",
+      "currency": "USD",
+      "title": "Mortgage Delinquencies",
+      "impact": "Low",
+      "forecast": null,
+      "previous": "4.37%",
+      "actual": null,
+      "raw_date_input": "2026-11-19T10:15:00-05:00"
+    },
+    {
+      "event_hash": "fc5d9565c1add5ab879287ac1bb3db29",
+      "timestamp_utc": "2026-11-19T15:30:00Z",
+      "currency": "USD",
+      "title": "Natural Gas Storage",
+      "impact": "Low",
+      "forecast": "25B",
+      "previous": "61B",
+      "actual": null,
+      "raw_date_input": "2026-11-19T10:30:00-05:00"
+    },
+    {
+      "event_hash": "a4c5394ce3e00c0ec59ba229f8acdd2d",
+      "timestamp_utc": "2026-11-19T17:30:00Z",
+      "currency": "USD",
+      "title": "FOMC Member Goolsbee Speaks",
+      "impact": "Low",
+      "forecast": null,
+      "previous": null,
+      "actual": null,
+      "raw_date_input": "2026-11-19T12:30:00-05:00"
+    },
+    {
+      "event_hash": "acc54be85a28720278f04a606bf03907",
+      "timestamp_utc": "2026-11-19T19:15:00Z",
+      "currency": "USD",
+      "title": "FOMC Member Barr Speaks",
+      "impact": "Low",
+      "forecast": null,
+      "previous": null,
+      "actual": null,
+      "raw_date_input": "2026-11-19T14:15:00-05:00"
+    },
+    {
+      "event_hash": "292716ccd160c41f14b406a271e8575c",
+      "timestamp_utc": "2026-11-19T21:00:00Z",
+      "currency": "USD",
+      "title": "FOMC Member Barkin Speaks",
+      "impact": "Low",
+      "forecast": null,
+      "previous": null,
+      "actual": null,
+      "raw_date_input": "2026-11-19T16:00:00-05:00"
+    },
+    {
+      "event_hash": "c8eeb9fe093aa1c1dd433abc3cf05665",
+      "timestamp_utc": "2026-11-19T23:30:00Z",
+      "currency": "JPY",
+      "title": "National Core CPI y/y",
+      "impact": "Low",
+      "forecast": "2.3%",
+      "previous": "2.1%",
+      "actual": null,
+      "raw_date_input": "2026-11-19T18:30:00-05:00"
+    },
+    {
+      "event_hash": "c2bb994560b044982a5d744ae2e87430",
+      "timestamp_utc": "2026-11-19T23:30:00Z",
+      "currency": "USD",
+      "title": "FOMC Member Paulson Speaks",
+      "impact": "Low",
+      "forecast": null,
+      "previous": null,
+      "actual": null,
+      "raw_date_input": "2026-11-19T18:30:00-05:00"
+    },
+    {
+      "event_hash": "ff1299ec91a313f916dfb0ac55bb58fc",
+      "timestamp_utc": "2026-11-20T13:25:00Z",
+      "currency": "USD",
+      "title": "FOMC Member Waller Speaks",
+      "impact": "Low",
+      "forecast": null,
+      "previous": null,
+      "actual": null,
+      "raw_date_input": "2026-11-20T08:25:00-05:00"
+    },
+    {
+      "event_hash": "6aece223a9d7c5f9e8e49e8d26a1a56c",
+      "timestamp_utc": "2026-11-20T15:00:00Z",
+      "currency": "USD",
+      "title": "Revised UoM Consumer Sentiment",
+      "impact": "Medium",
+      "forecast": "51.7",
+      "previous": "51.0",
+      "actual": null,
+      "raw_date_input": "2026-11-20T10:00:00-05:00"
+    },
+    {
+      "event_hash": "cfa5870b3821219d885c13212f772c90",
+      "timestamp_utc": "2026-11-20T15:00:00Z",
+      "currency": "USD",
+      "title": "Revised UoM Inflation Expectations",
+      "impact": "Medium",
+      "forecast": null,
+      "previous": "4.3%",
+      "actual": null,
+      "raw_date_input": "2026-11-20T10:00:00-05:00"
+    },
+    {
+      "event_hash": "5fdd19ca8d585a746d0766f3db262024",
+      "timestamp_utc": "2026-11-20T17:15:00Z",
+      "currency": "USD",
+      "title": "FOMC Member Cook Speaks",
+      "impact": "Low",
+      "forecast": null,
+      "previous": null,
+      "actual": null,
+      "raw_date_input": "2026-11-20T12:15:00-05:00"
+    }
+  ]
+}

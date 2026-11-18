@@ -70,8 +70,8 @@ The architecture is designed to run locally with minimal cloud dependencies, com
 ### Phase 1: Data Source Mapping & API Setup
 - [x] **FRED API provisioning:** Register a free FRED API key and verify REST calls for `DGS2` and `DGS10` (`2026-11-16` latest verified: `DGS2=4.83%`, `DGS10=5.12%`).
 - [x] **Yahoo Finance ticker validation:** Verify availability, delay, and formatting for `JPY=X`, `^TNX`, `^JB10YR`, `^GSPC`, `^N225`, `^VIX`, and `GC=F` (`2026-11-18` verified: `JPY=X`, `^TNX`, `^GSPC`, `^N225`, `^VIX`, `GC=F` active; `^JB10YR` delisted -> MoF daily CSV validated as canonical source).
-- [ ] **Economic calendar mapping:** Fetch the Forex Factory weekly JSON/XML feed and map fields for timestamp, currency (`USD`/`JPY`), impact, forecast, and actuals.
-- [ ] **Intervention feed curation:** Compile active RSS URLs (Reuters, Nikkei Asia, BoJ) and define a regex/keyword trigger list for verbal intervention language.
+- [x] **Economic calendar mapping:** Fetch the Forex Factory weekly JSON/XML feed and map fields for timestamp, currency (`USD`/`JPY`), impact, forecast, and actuals (`2026-11-18` verified: 53 USD/JPY events mapped, ISO-8601 UTC normalized, deterministic SHA256 hashed, and SQLite deduplication validated).
+- [x] **Intervention feed curation:** Compile active RSS URLs (Reuters, Nikkei Asia, BoJ) and define a regex/keyword trigger list for verbal intervention language (`2026-11-18` verified: 10 active institutional/wire feeds verified with 100% HTTP 200, 4-tier verbal escalation ladder defined, 458 unique headlines ingested into `news_headlines`, 151 intervention alerts categorized, 12/12 benchmark cases passed).
 
 ### Phase 2: Collection Architecture & Local Persistence
 - [x] **SQLite schema design:** Define `market_ticks`, `yield_spreads`, `macro_events`, and `news_headlines` with WAL mode and deduplication keys (`schema.sql` drafted).
