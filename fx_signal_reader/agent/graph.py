@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import sys
 from typing import Any, Callable, Literal
 import uuid
 
@@ -19,30 +18,18 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
-try:
-    from agent.nodes import make_macro_analyst_node, make_risk_committee_node
-    from agent.state import (
-        AgentState,
-        ApprovalStatus,
-        TradeAction,
-        TradeProposal,
-    )
-    from normalizer import normalize_datetime_utc
-except ImportError:  # pragma: no cover
-    _project_root = str(Path(__file__).resolve().parent.parent)
-    if _project_root not in sys.path:
-        sys.path.insert(0, _project_root)
-    from agent.nodes import make_macro_analyst_node, make_risk_committee_node
-    from agent.state import (
-        AgentState,
-        ApprovalStatus,
-        TradeAction,
-        TradeProposal,
-    )
-    from normalizer import normalize_datetime_utc
+from fx_signal_reader.agent.nodes import make_macro_analyst_node, make_risk_committee_node
+from fx_signal_reader.agent.state import (
+    AgentState,
+    ApprovalStatus,
+    TradeAction,
+    TradeProposal,
+)
+from fx_signal_reader.core import PROJECT_ROOT
+from fx_signal_reader.core.normalizer import normalize_datetime_utc
 
 
-DEFAULT_LEDGER_PATH = Path(__file__).resolve().parent.parent / "data" / "paper_trades.jsonl"
+DEFAULT_LEDGER_PATH = PROJECT_ROOT / "data" / "paper_trades.jsonl"
 ACTIONABLE_ACTIONS: frozenset[str] = frozenset({TradeAction.BUY.value, TradeAction.SELL.value})
 
 

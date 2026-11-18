@@ -17,6 +17,8 @@ from typing import Any, Callable, Dict, Optional
 
 import requests
 
+from fx_signal_reader.core import DEFAULT_DB_PATH, DEFAULT_SCHEMA_PATH
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
@@ -37,8 +39,8 @@ class BaseCollector(ABC):
 
     def __init__(
         self,
-        db_path: Path | str = "usdjpy_signals.db",
-        schema_path: Path | str = "schema.sql",
+        db_path: Path | str = DEFAULT_DB_PATH,
+        schema_path: Path | str = DEFAULT_SCHEMA_PATH,
         max_retries: int = 3,
         backoff_factor: float = 1.0,
         jitter: bool = True,

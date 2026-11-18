@@ -15,7 +15,7 @@ import math
 import sqlite3
 import unittest
 
-from normalizer import (
+from fx_signal_reader.core.normalizer import (
     clean_text,
     generate_event_hash,
     generate_url_hash,
@@ -25,7 +25,7 @@ from normalizer import (
     parse_float_or_none,
     parse_japanese_era_date,
 )
-from spread_calculator import (
+from fx_signal_reader.core.spread_calculator import (
     YieldSpreadRecord,
     align_yield_series,
     calculate_live_spread,

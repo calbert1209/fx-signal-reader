@@ -36,9 +36,10 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from collectors.calendar import CalendarCollector
-from collectors.market_ticks import MarketTicksCollector
-from collectors.news_rss import NewsRSSCollector
+from fx_signal_reader.collectors.calendar import CalendarCollector
+from fx_signal_reader.collectors.market_ticks import MarketTicksCollector
+from fx_signal_reader.collectors.news_rss import NewsRSSCollector
+from fx_signal_reader.core import DEFAULT_DB_PATH, DEFAULT_SCHEMA_PATH
 
 # Configure structured logging
 logging.basicConfig(
@@ -217,8 +218,8 @@ class JobSchedule:
 class SchedulerConfig:
     """Scheduler configuration parameters."""
 
-    db_path: Path = field(default_factory=lambda: Path("usdjpy_signals.db"))
-    schema_path: Path = field(default_factory=lambda: Path("schema.sql"))
+    db_path: Path = field(default_factory=lambda: DEFAULT_DB_PATH)
+    schema_path: Path = field(default_factory=lambda: DEFAULT_SCHEMA_PATH)
     news_interval: int = 300  # 5 minutes
     ticks_interval: int = 900  # 15 minutes
     calendar_interval: int = 86400  # 24 hours / daily
@@ -235,7 +236,7 @@ class SchedulerConfig:
     def from_env_and_args(cls, args: Optional[argparse.Namespace] = None) -> SchedulerConfig:
         """Constructs configuration merging defaults, environment variables, and CLI flags."""
         # Read from environment
-        env_db_path = os.getenv("FX_DB_PATH", "usdjpy_signals.db")
+        env_db_path = os.getenv("FX_DB_PATH", str(DEFAULT_DB_PATH))
         env_news = parse_interval(os.getenv("INTERVAL_NEWS"), 300)
         env_ticks = parse_interval(os.getenv("INTERVAL_TICKS"), 900)
         env_calendar = parse_interval(os.getenv("INTERVAL_CALENDAR"), 86400)
@@ -643,13 +644,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--db-path",
         type=str,
-        default=os.getenv("FX_DB_PATH", "usdjpy_signals.db"),
+        default=os.getenv("FX_DB_PATH", str(DEFAULT_DB_PATH)),
         help="Path to SQLite database file",
     )
     parser.add_argument(
         "--schema-path",
         type=str,
-        default="schema.sql",
+        default=str(DEFAULT_SCHEMA_PATH),
         help="Path to SQL schema file",
     )
     parser.add_argument(

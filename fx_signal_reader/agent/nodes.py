@@ -16,54 +16,28 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import math
-from pathlib import Path
-import sys
 from typing import Any, Callable
 import uuid
 
-try:
-    from agent.state import (
-        AgentState,
-        ApprovalStatus,
-        InterventionAlertLevel,
-        MacroAssessment,
-        RiskAssessment,
-        RiskRegime,
-        TradeAction,
-        TradeProposal,
-        YieldBias,
-        validate_state_models,
-    )
-    from mcp_server import (
-        get_latest_yield_spread,
-        get_market_ticks_summary,
-        get_recent_mof_alerts,
-        get_upcoming_macro_events,
-    )
-    from normalizer import normalize_datetime_utc
-except ImportError:  # pragma: no cover
-    _project_root = str(Path(__file__).resolve().parent.parent)
-    if _project_root not in sys.path:
-        sys.path.insert(0, _project_root)
-    from agent.state import (
-        AgentState,
-        ApprovalStatus,
-        InterventionAlertLevel,
-        MacroAssessment,
-        RiskAssessment,
-        RiskRegime,
-        TradeAction,
-        TradeProposal,
-        YieldBias,
-        validate_state_models,
-    )
-    from mcp_server import (
-        get_latest_yield_spread,
-        get_market_ticks_summary,
-        get_recent_mof_alerts,
-        get_upcoming_macro_events,
-    )
-    from normalizer import normalize_datetime_utc
+from fx_signal_reader.agent.state import (
+    AgentState,
+    ApprovalStatus,
+    InterventionAlertLevel,
+    MacroAssessment,
+    RiskAssessment,
+    RiskRegime,
+    TradeAction,
+    TradeProposal,
+    YieldBias,
+    validate_state_models,
+)
+from fx_signal_reader.core.normalizer import normalize_datetime_utc
+from fx_signal_reader.mcp.server import (
+    get_latest_yield_spread,
+    get_market_ticks_summary,
+    get_recent_mof_alerts,
+    get_upcoming_macro_events,
+)
 
 
 # Yield-spread directional thresholds (percentage points; 1.0% = 100 bps)

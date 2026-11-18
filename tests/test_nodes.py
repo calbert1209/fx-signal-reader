@@ -27,17 +27,13 @@ import unittest
 
 from langgraph.graph import END, START, StateGraph
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-from agent.nodes import (  # noqa: E402
+from fx_signal_reader.agent.nodes import (
     macro_analyst_node,
     make_macro_analyst_node,
     make_risk_committee_node,
     risk_committee_node,
 )
-from agent.state import (  # noqa: E402
+from fx_signal_reader.agent.state import (
     AgentState,
     ApprovalStatus,
     InterventionAlertLevel,
@@ -50,9 +46,11 @@ from agent.state import (  # noqa: E402
     create_initial_state,
     validate_state_models,
 )
-
-SCHEMA_PATH = PROJECT_ROOT / "schema.sql"
-LIVE_DB_PATH = PROJECT_ROOT / "usdjpy_signals.db"
+from fx_signal_reader.core import (
+    DEFAULT_DB_PATH as LIVE_DB_PATH,
+    DEFAULT_SCHEMA_PATH as SCHEMA_PATH,
+    PROJECT_ROOT,
+)
 
 
 def _build_two_node_graph(db_path: str | None = None):

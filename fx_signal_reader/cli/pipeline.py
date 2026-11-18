@@ -21,16 +21,12 @@ import sys
 from typing import Any
 import uuid
 
-PROJECT_ROOT = Path(__file__).resolve().parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-from agent.graph import (
+from fx_signal_reader.agent.graph import (
     DEFAULT_LEDGER_PATH,
     build_signal_graph,
     resume_with_decision,
 )
-from agent.state import create_initial_state
+from fx_signal_reader.agent.state import create_initial_state
 
 
 def run_signal_pipeline(

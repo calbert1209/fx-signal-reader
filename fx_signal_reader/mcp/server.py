@@ -15,27 +15,21 @@ from __future__ import annotations
 import argparse
 import os
 import sqlite3
-import sys
 from pathlib import Path
 from typing import Any
-
-# Ensure project root is importable regardless of the MCP client's working directory
-PROJECT_ROOT = Path(__file__).resolve().parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 
-from collectors.market_ticks import MarketTicksCollector
-from collectors.news_rss import NewsRSSCollector
-from spread_calculator import (
+from fx_signal_reader.collectors.market_ticks import MarketTicksCollector
+from fx_signal_reader.collectors.news_rss import NewsRSSCollector
+from fx_signal_reader.core import DEFAULT_DB_PATH, PROJECT_ROOT
+from fx_signal_reader.core.spread_calculator import (
     compute_spread_bps,
     compute_us_2s10s_slope,
     compute_yield_spread,
 )
 
-DEFAULT_DB_PATH = PROJECT_ROOT / "usdjpy_signals.db"
 CORE_TICKER_SYMBOLS: tuple[str, ...] = tuple(MarketTicksCollector.TICKERS)
 _MAX_QUERY_LIMIT = 1000
 

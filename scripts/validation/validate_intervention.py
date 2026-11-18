@@ -18,7 +18,7 @@ Key Capabilities:
    - matched_keywords (comma-separated)
 4. Inserts into SQLite database with WAL mode and validates deduplication.
 5. Runs test assertions against curated benchmark headlines (Tiers 1-4 and controls).
-6. Exports structured results to intervention_validation_results.json.
+6. Exports structured results to docs/validation_results/intervention_validation_results.json.
 """
 
 from __future__ import annotations
@@ -42,9 +42,9 @@ from dateutil import parser as date_parser
 # Configuration & Feed Registry
 # -----------------------------------------------------------------------------
 
-DB_PATH = Path(os.getenv("FX_DB_PATH", "fx_signals.db"))
-SCHEMA_PATH = Path("schema.sql")
-OUTPUT_JSON = Path("intervention_validation_results.json")
+DB_PATH = Path(os.getenv("FX_DB_PATH", "data/usdjpy_signals.db"))
+SCHEMA_PATH = Path("fx_signal_reader/core/schema.sql")
+OUTPUT_JSON = Path("docs/validation_results/intervention_validation_results.json")
 
 HEADERS = {
     "User-Agent": (
@@ -829,6 +829,7 @@ def main() -> int:
         "sample_flagged_headlines": sample_matches,
     }
 
+    OUTPUT_JSON.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT_JSON.write_text(json.dumps(final_output, indent=2, ensure_ascii=False))
     print(f"    Export complete -> {OUTPUT_JSON}")
     print(f"\n================================================================")

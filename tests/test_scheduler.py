@@ -20,7 +20,8 @@ import tempfile
 import unittest
 from unittest.mock import patch, MagicMock
 
-from scheduler import (
+from fx_signal_reader.core import DEFAULT_SCHEMA_PATH
+from fx_signal_reader.cli.schedule import (
     JST,
     UTC,
     JobSchedule,
@@ -314,7 +315,7 @@ class TestSchedulerDryRunAndLifecycle(unittest.TestCase):
         sched = SignalScheduler(cfg)
 
         # Mock NewsRSSCollector to throw an exception
-        with patch("scheduler.NewsRSSCollector") as mock_news:
+        with patch("fx_signal_reader.cli.schedule.NewsRSSCollector") as mock_news:
             mock_inst = MagicMock()
             mock_inst.collect.side_effect = RuntimeError("Simulated transient network drop")
             mock_news.return_value = mock_inst
@@ -345,7 +346,7 @@ class TestSchedulerIntegrationAgainstDB(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp_dir.name) / "test_signals.db"
-        self.schema_path = Path("schema.sql")
+        self.schema_path = DEFAULT_SCHEMA_PATH
 
     def tearDown(self):
         self.temp_dir.cleanup()

@@ -15,7 +15,7 @@ import math
 import sqlite3
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from normalizer import (
+from fx_signal_reader.core.normalizer import (
     clean_text,
     is_valid_iso8601_utc,
     normalize_datetime_utc,

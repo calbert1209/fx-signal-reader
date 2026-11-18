@@ -7,6 +7,7 @@ import csv
 import json
 from datetime import datetime, timezone
 from io import StringIO
+from pathlib import Path
 import requests
 import yfinance as yf
 
@@ -140,7 +141,8 @@ def main():
             print(f"Error testing {sym}: {exc}")
             results[sym] = {"symbol": sym, "available": False, "error": str(exc)}
 
-    out_file = "yfinance_validation_results.json"
+    out_file = Path("docs/validation_results/yfinance_validation_results.json")
+    out_file.parent.mkdir(parents=True, exist_ok=True)
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
     print(f"\nAll validations complete. Results saved to {out_file}")

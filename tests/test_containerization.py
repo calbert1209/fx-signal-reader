@@ -32,7 +32,7 @@ class TestContainerization(unittest.TestCase):
         cls.compose_path = cls.project_root / "docker-compose.yml"
         cls.dockerignore_path = cls.project_root / ".dockerignore"
         cls.env_example_path = cls.project_root / ".env.example"
-        cls.schema_path = cls.project_root / "schema.sql"
+        cls.schema_path = cls.project_root / "fx_signal_reader" / "core" / "schema.sql"
 
     def test_dockerfile_exists_and_security_directives(self) -> None:
         """Verify Dockerfile exists and enforces container security best practices."""
@@ -74,11 +74,13 @@ class TestContainerization(unittest.TestCase):
         self.assertIn("HEALTHCHECK", content, "Dockerfile must define HEALTHCHECK")
         self.assertIn("sqlite3", content, "HEALTHCHECK must verify SQLite responsiveness")
 
-        # 7. Default command runs python scheduler.py with db-path
+        # 7. Default command runs fx-schedule with db-path and copies pyproject.toml + fx_signal_reader/
+        self.assertIn("pyproject.toml", content, "Dockerfile must copy pyproject.toml")
+        self.assertIn("fx_signal_reader/", content, "Dockerfile must copy fx_signal_reader/ package")
         self.assertRegex(
             content,
-            r'CMD\s*\["python",\s*"scheduler.py",\s*"--db-path",\s*"/app/data/usdjpy_signals.db"\]',
-            "Dockerfile must specify CMD running scheduler.py with /app/data/usdjpy_signals.db",
+            r'CMD\s*\["fx-schedule",\s*"--db-path",\s*"/app/data/usdjpy_signals.db"\]',
+            "Dockerfile must specify CMD running fx-schedule with /app/data/usdjpy_signals.db",
         )
 
     def test_docker_compose_structure_and_directives(self) -> None:

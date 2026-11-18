@@ -27,8 +27,8 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.types import CallToolResult
 
-PROJECT_ROOT = Path(__file__).resolve().parent
-DEFAULT_CONFIG_PATH = PROJECT_ROOT / "mcp_servers.json"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "mcp_servers.json"
 DEFAULT_DOTENV_PATH = PROJECT_ROOT / ".env"
 GLOBAL_MCP_CONFIG_PATH = Path.home() / ".gemini" / "config" / "mcp_config.json"
 NAMESPACED_SEPARATOR = ":"

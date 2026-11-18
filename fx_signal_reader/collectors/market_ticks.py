@@ -18,7 +18,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 import yfinance as yf
 
-from collectors.base import BaseCollector
+from fx_signal_reader.collectors.base import BaseCollector
+from fx_signal_reader.core import DEFAULT_DB_PATH, DEFAULT_SCHEMA_PATH
 
 
 class MarketTicksCollector(BaseCollector):
@@ -41,8 +42,8 @@ class MarketTicksCollector(BaseCollector):
 
     def __init__(
         self,
-        db_path: Path | str = "usdjpy_signals.db",
-        schema_path: Path | str = "schema.sql",
+        db_path: Path | str = DEFAULT_DB_PATH,
+        schema_path: Path | str = DEFAULT_SCHEMA_PATH,
         max_retries: int = 3,
         backoff_factor: float = 1.0,
         jitter: bool = True,

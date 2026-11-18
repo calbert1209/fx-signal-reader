@@ -3,10 +3,11 @@
     "usdjpy-sqlite": {
       "command": "/Users/albert/Projects/fx-signal-reader/.venv/bin/python",
       "args": [
-        "/Users/albert/Projects/fx-signal-reader/mcp_server.py"
+        "-m",
+        "fx_signal_reader.mcp.server"
       ],
       "env": {
-        "FX_DB_PATH": "/Users/albert/Projects/fx-signal-reader/usdjpy_signals.db"
+        "FX_DB_PATH": "/Users/albert/Projects/fx-signal-reader/data/usdjpy_signals.db"
       }
     },
     "nasdaq-data-link": {

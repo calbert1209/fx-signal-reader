@@ -9,20 +9,12 @@ with `operator.add` reducer support on `audit_log`, and state helper utilities.
 
 from enum import Enum
 import operator
-from pathlib import Path
-import sys
 from typing import Annotated, Any, Mapping, TypedDict
 import uuid
 
 from pydantic import BaseModel, Field
 
-try:
-    from normalizer import normalize_datetime_utc
-except ImportError:  # pragma: no cover
-    _project_root = str(Path(__file__).resolve().parent.parent)
-    if _project_root not in sys.path:
-        sys.path.insert(0, _project_root)
-    from normalizer import normalize_datetime_utc
+from fx_signal_reader.core.normalizer import normalize_datetime_utc
 
 
 class YieldBias(str, Enum):

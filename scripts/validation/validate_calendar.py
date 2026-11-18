@@ -8,7 +8,7 @@ This script:
 3. Normalizes timestamps to ISO-8601 UTC and generates deterministic SHA256 event hashes.
 4. Maps fields into the macro_events SQLite table schema.
 5. Verifies insertion and deduplication into SQLite.
-6. Saves validation outputs to calendar_validation_results.json.
+6. Saves validation outputs to docs/validation_results/calendar_validation_results.json.
 """
 
 import hashlib
@@ -28,7 +28,7 @@ XML_FEED_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.xml"
 CSV_FEED_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.csv"
 
 CACHE_FILE = Path("data/raw_calendar_thisweek.json")
-RESULTS_FILE = Path("calendar_validation_results.json")
+RESULTS_FILE = Path("docs/validation_results/calendar_validation_results.json")
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -411,6 +411,7 @@ def main():
         "mapped_events_usd_jpy": mapped_events,
     }
 
+    RESULTS_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(RESULTS_FILE, "w", encoding="utf-8") as f:
         json.dump(full_results, f, indent=2)
 

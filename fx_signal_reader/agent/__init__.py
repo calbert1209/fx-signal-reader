@@ -1,6 +1,6 @@
 """USD/JPY signal reader LangGraph agent package."""
 
-from agent.graph import (
+from fx_signal_reader.agent.graph import (
     DEFAULT_LEDGER_PATH,
     ExecutionReceipt,
     build_signal_graph,
@@ -12,13 +12,13 @@ from agent.graph import (
     route_after_approval_gate,
     route_after_risk_committee,
 )
-from agent.nodes import (
+from fx_signal_reader.agent.nodes import (
     macro_analyst_node,
     make_macro_analyst_node,
     make_risk_committee_node,
     risk_committee_node,
 )
-from agent.state import (
+from fx_signal_reader.agent.state import (
     AgentState,
     ApprovalStatus,
     InterventionAlertLevel,

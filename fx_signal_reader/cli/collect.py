@@ -20,10 +20,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
-from collectors.base import BaseCollector
-from collectors.calendar import CalendarCollector
-from collectors.market_ticks import MarketTicksCollector
-from collectors.news_rss import NewsRSSCollector
+from fx_signal_reader.collectors.base import BaseCollector
+from fx_signal_reader.collectors.calendar import CalendarCollector
+from fx_signal_reader.collectors.market_ticks import MarketTicksCollector
+from fx_signal_reader.collectors.news_rss import NewsRSSCollector
+from fx_signal_reader.core import DEFAULT_DB_PATH, DEFAULT_SCHEMA_PATH
 
 
 def init_db(db_path: Path, schema_path: Path) -> sqlite3.Connection:
@@ -67,14 +68,14 @@ def main() -> int:
     parser.add_argument(
         "--db-path",
         type=str,
-        default=os.getenv("FX_DB_PATH", "usdjpy_signals.db"),
-        help="Path to SQLite database file (default: usdjpy_signals.db)",
+        default=os.getenv("FX_DB_PATH", str(DEFAULT_DB_PATH)),
+        help=f"Path to SQLite database file (default: {DEFAULT_DB_PATH})",
     )
     parser.add_argument(
         "--schema-path",
         type=str,
-        default="schema.sql",
-        help="Path to SQL schema file (default: schema.sql)",
+        default=str(DEFAULT_SCHEMA_PATH),
+        help=f"Path to SQL schema file (default: {DEFAULT_SCHEMA_PATH})",
     )
     parser.add_argument(
         "--retries",

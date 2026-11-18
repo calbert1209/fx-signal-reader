@@ -24,7 +24,7 @@ import requests
 from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
 
-from collectors.base import BaseCollector
+from fx_signal_reader.collectors.base import BaseCollector
 
 
 class NewsRSSCollector(BaseCollector):

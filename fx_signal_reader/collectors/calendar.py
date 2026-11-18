@@ -20,7 +20,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
-from collectors.base import BaseCollector
+from fx_signal_reader.collectors.base import BaseCollector
+from fx_signal_reader.core import DEFAULT_DB_PATH, DEFAULT_SCHEMA_PATH, PROJECT_ROOT
 
 
 class CalendarCollector(BaseCollector):
@@ -30,12 +31,12 @@ class CalendarCollector(BaseCollector):
 
     JSON_FEED_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
     XML_FEED_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.xml"
-    DEFAULT_CACHE_PATH = Path("data/raw_calendar_thisweek.json")
+    DEFAULT_CACHE_PATH = PROJECT_ROOT / "data" / "raw_calendar_thisweek.json"
 
     def __init__(
         self,
-        db_path: Path | str = "usdjpy_signals.db",
-        schema_path: Path | str = "schema.sql",
+        db_path: Path | str = DEFAULT_DB_PATH,
+        schema_path: Path | str = DEFAULT_SCHEMA_PATH,
         cache_path: Path | str = DEFAULT_CACHE_PATH,
         max_retries: int = 3,
         backoff_factor: float = 1.0,

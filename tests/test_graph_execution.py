@@ -28,25 +28,23 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-from agent.graph import (  # noqa: E402
+from fx_signal_reader.agent.graph import (
     ExecutionReceipt,
     build_signal_graph,
     resume_with_decision,
 )
-from agent.state import (  # noqa: E402
+from fx_signal_reader.agent.state import (
     ApprovalStatus,
     TradeAction,
     create_initial_state,
     validate_state_models,
 )
-import run_pipeline  # noqa: E402
-
-SCHEMA_PATH = PROJECT_ROOT / "schema.sql"
-LIVE_DB_PATH = PROJECT_ROOT / "usdjpy_signals.db"
+from fx_signal_reader.cli import pipeline as run_pipeline
+from fx_signal_reader.core import (
+    DEFAULT_DB_PATH as LIVE_DB_PATH,
+    DEFAULT_SCHEMA_PATH as SCHEMA_PATH,
+    PROJECT_ROOT,
+)
 
 
 def _build_fixture_db(
@@ -271,7 +269,8 @@ class TestGraphApprovalGateAndExecution(unittest.TestCase):
         proc_approve = subprocess.run(
             [
                 sys.executable,
-                str(PROJECT_ROOT / "run_pipeline.py"),
+                "-m",
+                "fx_signal_reader.cli.pipeline",
                 "--db-path",
                 str(self.buy_db),
                 "--ledger-path",
@@ -294,7 +293,8 @@ class TestGraphApprovalGateAndExecution(unittest.TestCase):
         proc_reject = subprocess.run(
             [
                 sys.executable,
-                str(PROJECT_ROOT / "run_pipeline.py"),
+                "-m",
+                "fx_signal_reader.cli.pipeline",
                 "--db-path",
                 str(self.buy_db),
                 "--ledger-path",
@@ -322,7 +322,8 @@ class TestGraphApprovalGateAndExecution(unittest.TestCase):
         proc = subprocess.run(
             [
                 sys.executable,
-                str(PROJECT_ROOT / "run_pipeline.py"),
+                "-m",
+                "fx_signal_reader.cli.pipeline",
                 "--db-path",
                 str(LIVE_DB_PATH),
                 "--ledger-path",

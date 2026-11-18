@@ -24,16 +24,16 @@ RUN apt-get update && \
 WORKDIR /app
 
 # Install Python dependencies from requirements.txt
-COPY requirements.txt .
+COPY pyproject.toml requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Create data directory and assign ownership to appuser
 RUN mkdir -p /app/data && chown -R appuser:appuser /app
 
-# Copy application source code and initial data
-COPY --chown=appuser:appuser schema.sql collector.py scheduler.py normalizer.py spread_calculator.py ./
-COPY --chown=appuser:appuser collectors/ ./collectors/
+# Copy application source code and initial data, then install the local package
+COPY --chown=appuser:appuser fx_signal_reader/ ./fx_signal_reader/
 COPY --chown=appuser:appuser data/ ./data/
+RUN pip install --no-cache-dir --no-deps .
 
 # Switch to non-root user
 USER appuser
@@ -46,4 +46,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
 STOPSIGNAL SIGTERM
 
 # Default command: run scheduler with volume database path
-CMD ["python", "scheduler.py", "--db-path", "/app/data/usdjpy_signals.db"]
+CMD ["fx-schedule", "--db-path", "/app/data/usdjpy_signals.db"]

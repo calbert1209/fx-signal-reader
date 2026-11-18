@@ -24,12 +24,12 @@ import anyio
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-import mcp_server  # noqa: E402
-from mcp_server import (  # noqa: E402
+from fx_signal_reader.core import (
+    DEFAULT_SCHEMA_PATH as SCHEMA_PATH,
+    PROJECT_ROOT,
+)
+import fx_signal_reader.mcp.server as mcp_server
+from fx_signal_reader.mcp.server import (
     CORE_TICKER_SYMBOLS,
     DEFAULT_DB_PATH,
     get_latest_yield_spread,
@@ -39,8 +39,6 @@ from mcp_server import (  # noqa: E402
     get_upcoming_macro_events,
     resolve_db_path,
 )
-
-SCHEMA_PATH = PROJECT_ROOT / "schema.sql"
 
 
 def _create_fixture_db(db_file: Path) -> None:
@@ -392,7 +390,7 @@ class TestMCPServerRegistrationAndStdio(unittest.TestCase):
             env["FX_DB_PATH"] = str(self.db_path)
             params = StdioServerParameters(
                 command=sys.executable,
-                args=[str(PROJECT_ROOT / "mcp_server.py")],
+                args=["-m", "fx_signal_reader.mcp.server"],
                 env=env,
             )
             async with stdio_client(params) as (read_stream, write_stream):
@@ -458,7 +456,7 @@ class TestMCPServerRegistrationAndStdio(unittest.TestCase):
             env = {k: v for k, v in os.environ.items() if k != "FX_DB_PATH"}
             params = StdioServerParameters(
                 command=sys.executable,
-                args=[str(PROJECT_ROOT / "mcp_server.py")],
+                args=["-m", "fx_signal_reader.mcp.server"],
                 env=env,
             )
             async with stdio_client(params) as (read_stream, write_stream):

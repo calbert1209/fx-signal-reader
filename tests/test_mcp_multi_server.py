@@ -30,12 +30,13 @@ from unittest import mock
 
 import anyio
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-import mcp_client  # noqa: E402
-from mcp_client import (  # noqa: E402
+from fx_signal_reader.core import (
+    DEFAULT_DB_PATH as LIVE_DB_PATH,
+    DEFAULT_SCHEMA_PATH as SCHEMA_PATH,
+    PROJECT_ROOT,
+)
+import fx_signal_reader.mcp.client as mcp_client
+from fx_signal_reader.mcp.client import (
     DEFAULT_CONFIG_PATH,
     MCPConfigError,
     MCPServerNotConnectedError,
@@ -50,10 +51,8 @@ from mcp_client import (  # noqa: E402
     load_server_specs,
     parse_namespaced_tool,
 )
-from mcp.types import CallToolResult, TextContent  # noqa: E402
+from mcp.types import CallToolResult, TextContent
 
-SCHEMA_PATH = PROJECT_ROOT / "schema.sql"
-LIVE_DB_PATH = PROJECT_ROOT / "usdjpy_signals.db"
 NASDAQ_MCP_DIR = Path("/Users/albert/Projects/nasdaq-data-link-mcp")
 
 
@@ -123,11 +122,11 @@ class TestMCPConfigLoadingAndEnvExpansion(unittest.TestCase):
         )
         self.assertEqual(
             sqlite_cfg["args"],
-            ["/Users/albert/Projects/fx-signal-reader/mcp_server.py"],
+            ["-m", "fx_signal_reader.mcp.server"],
         )
         self.assertEqual(
             sqlite_cfg["env"]["FX_DB_PATH"],
-            "/Users/albert/Projects/fx-signal-reader/usdjpy_signals.db",
+            "/Users/albert/Projects/fx-signal-reader/data/usdjpy_signals.db",
         )
 
         nasdaq_cfg = servers["nasdaq-data-link"]
@@ -309,7 +308,7 @@ class TestGracefulServerIsolation(unittest.TestCase):
         specs = {
             "usdjpy-sqlite": {
                 "command": sys.executable,
-                "args": [str(PROJECT_ROOT / "mcp_server.py")],
+                "args": ["-m", "fx_signal_reader.mcp.server"],
                 "env": {"FX_DB_PATH": str(self.db_path)},
             },
             "broken-missing-bin": {
@@ -323,7 +322,7 @@ class TestGracefulServerIsolation(unittest.TestCase):
         }
 
         async def _run() -> None:
-            with self.assertLogs("mcp_client", level="WARNING") as cm:
+            with self.assertLogs("fx_signal_reader.mcp.client", level="WARNING") as cm:
                 async with MultiServerMCPClient(
                     server_specs=specs,
                     connect_timeout=10.0,
@@ -363,7 +362,7 @@ class TestGracefulServerIsolation(unittest.TestCase):
         specs = {
             "usdjpy-sqlite": {
                 "command": sys.executable,
-                "args": [str(PROJECT_ROOT / "mcp_server.py")],
+                "args": ["-m", "fx_signal_reader.mcp.server"],
                 "env": {"FX_DB_PATH": str(self.db_path)},
             },
             "hanging-server": {
@@ -373,7 +372,7 @@ class TestGracefulServerIsolation(unittest.TestCase):
         }
 
         async def _run() -> None:
-            with self.assertLogs("mcp_client", level="WARNING") as cm:
+            with self.assertLogs("fx_signal_reader.mcp.client", level="WARNING") as cm:
                 async with MultiServerMCPClient(
                     server_specs=specs,
                     connect_timeout=4.0,

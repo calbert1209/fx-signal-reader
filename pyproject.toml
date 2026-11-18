@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fx-signal-reader"
+version = "0.1.0"
+description = "Automated USD/JPY signal pipeline with SQLite WAL persistence, MCP tools, and LangGraph multi-agent approval workflow."
+requires-python = ">=3.11"
+dependencies = [
+    "yfinance>=1.8.0",
+    "requests>=2.34.0",
+    "mcp>=1.2.0",
+    "pydantic>=2.7.0",
+    "langgraph>=0.2.0",
+]
+
+[project.scripts]
+fx-collect = "fx_signal_reader.cli.collect:main"
+fx-schedule = "fx_signal_reader.cli.schedule:main"
+fx-mcp = "fx_signal_reader.mcp.server:main"
+fx-mcp-client = "fx_signal_reader.mcp.client:main"
+fx-pipeline = "fx_signal_reader.cli.pipeline:main"
+
+[tool.setuptools.packages.find]
+include = ["fx_signal_reader*"]
+
+[tool.setuptools.package-data]
+"fx_signal_reader.core" = ["schema.sql"]
+"fx_signal_reader.mcp" = ["mcp_servers.json"]
