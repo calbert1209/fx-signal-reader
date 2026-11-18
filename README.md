@@ -106,6 +106,8 @@ fx-schedule --dry-run --run-once
 
 ### 3. Run the Agent Signal Pipeline
 
+Read [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md) for Python and MCP agent examples.
+
 Execute the LangGraph workflow to generate a USD/JPY trade proposal:
 
 ```bash
