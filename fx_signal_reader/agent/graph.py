@@ -175,6 +175,7 @@ def finalize_hold_node(state: AgentState) -> dict[str, Any]:
 def paper_execution_node(
     state: AgentState,
     ledger_path: str | Path | None = None,
+    write_ledger: bool = True,
 ) -> dict[str, Any]:
     """
     Execute an approved paper trade and log to the JSONL ledger, or cancel cleanly
@@ -198,7 +199,8 @@ def paper_execution_node(
                 f"{proposal.pair} @ {fill_price})."
             ),
         )
-        _append_to_ledger(receipt, resolved_ledger)
+        if write_ledger:
+            _append_to_ledger(receipt, resolved_ledger)
         return {
             "execution_receipt": receipt.model_dump(mode="json"),
             "audit_log": [
@@ -236,11 +238,12 @@ def paper_execution_node(
 
 def make_paper_execution_node(
     ledger_path: str | Path | None = None,
+    write_ledger: bool = True,
 ) -> Callable[[AgentState], dict[str, Any]]:
     """Create a `StateGraph`-compatible `paper_execution` node bound to `ledger_path`."""
 
     def _paper_execution(state: AgentState) -> dict[str, Any]:
-        return paper_execution_node(state, ledger_path=ledger_path)
+        return paper_execution_node(state, ledger_path=ledger_path, write_ledger=write_ledger)
 
     return _paper_execution
 
@@ -250,6 +253,9 @@ def build_signal_graph(
     ledger_path: str | Path | None = None,
     checkpointer: Any | None = None,
     interrupt_on_actionable: bool = True,
+    point_in_time: bool = False,
+    mof_lookback_hours: int | None = None,
+    write_ledger: bool = True,
 ) -> Any:
     """
     Build and compile the USD/JPY LangGraph pipeline:
@@ -258,11 +264,28 @@ def build_signal_graph(
       -> [HOLD]     -> finalize_hold -> END
     """
     builder = StateGraph(AgentState)
-    builder.add_node("macro_analyst", make_macro_analyst_node(db_path=db_path))
-    builder.add_node("risk_committee", make_risk_committee_node(db_path=db_path))
+    builder.add_node(
+        "macro_analyst",
+        make_macro_analyst_node(
+            db_path=db_path,
+            point_in_time=point_in_time,
+            mof_lookback_hours=mof_lookback_hours,
+        ),
+    )
+    builder.add_node(
+        "risk_committee",
+        make_risk_committee_node(
+            db_path=db_path,
+            point_in_time=point_in_time,
+            mof_lookback_hours=mof_lookback_hours,
+        ),
+    )
     builder.add_node("human_approval_gate", human_approval_gate_node)
     builder.add_node("finalize_hold", finalize_hold_node)
-    builder.add_node("paper_execution", make_paper_execution_node(ledger_path=ledger_path))
+    builder.add_node(
+        "paper_execution",
+        make_paper_execution_node(ledger_path=ledger_path, write_ledger=write_ledger),
+    )
 
     builder.add_edge(START, "macro_analyst")
     builder.add_edge("macro_analyst", "risk_committee")

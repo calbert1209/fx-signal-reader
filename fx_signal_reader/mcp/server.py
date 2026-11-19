@@ -13,6 +13,8 @@ Reuses:
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timedelta, timezone
+import math
 import os
 import sqlite3
 from pathlib import Path
@@ -24,6 +26,7 @@ from mcp.types import ToolAnnotations
 from fx_signal_reader.collectors.market_ticks import MarketTicksCollector
 from fx_signal_reader.collectors.news_rss import NewsRSSCollector
 from fx_signal_reader.core import DEFAULT_DB_PATH, PROJECT_ROOT
+from fx_signal_reader.core.normalizer import normalize_datetime_utc
 from fx_signal_reader.core.spread_calculator import (
     compute_spread_bps,
     compute_us_2s10s_slope,
@@ -68,31 +71,83 @@ def get_readonly_connection(db_path: str | Path | None = None) -> sqlite3.Connec
     return conn
 
 
-def get_latest_yield_spread(db_path: str | None = None) -> dict[str, Any]:
+def _normalize_as_of_utc(as_of_utc: str | None) -> str | None:
+    """Validate and normalize an optional `as_of_utc` boundary to `YYYY-MM-DDTHH:MM:SSZ`."""
+    if as_of_utc is None:
+        return None
+    if isinstance(as_of_utc, bool):
+        raise ValueError("as_of_utc must be a valid timestamp string, not bool.")
+    return normalize_datetime_utc(as_of_utc, fallback_now=False)
+
+
+def _parse_utc_str(ts_utc: str) -> datetime:
+    """Parse a normalized `YYYY-MM-DDTHH:MM:SSZ` timestamp into an aware UTC datetime."""
+    return datetime.strptime(ts_utc, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+
+
+def _validate_non_negative_hours(value: int | float, name: str) -> float:
+    """Validate that an hour offset parameter is finite, non-negative, and not a bool."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be a non-negative number, got {type(value).__name__}.")
+    numeric = float(value)
+    if not math.isfinite(numeric) or numeric < 0:
+        raise ValueError(f"{name} must be finite and non-negative, got {value!r}.")
+    return numeric
+
+
+def get_latest_yield_spread(
+    db_path: str | None = None,
+    as_of_utc: str | None = None,
+) -> dict[str, Any]:
     """
     Return the latest US-Japan sovereign yield spread snapshot along with the
     most recent USD/JPY (`JPY=X`) spot tick from `market_ticks`.
+    When `as_of_utc` is set, restricts both queries to rows at or before `as_of_utc`.
     """
+    normalized_as_of = _normalize_as_of_utc(as_of_utc)
     conn = get_readonly_connection(db_path)
     try:
-        spread_row = conn.execute(
-            """
-            SELECT timestamp_utc, us_2y, us_10y, jp_10y, spread_10y, source
-            FROM yield_spreads
-            ORDER BY timestamp_utc DESC
-            LIMIT 1
-            """
-        ).fetchone()
+        if normalized_as_of is not None:
+            spread_row = conn.execute(
+                """
+                SELECT timestamp_utc, us_2y, us_10y, jp_10y, spread_10y, source
+                FROM yield_spreads
+                WHERE timestamp_utc <= ?
+                ORDER BY timestamp_utc DESC
+                LIMIT 1
+                """,
+                (normalized_as_of,),
+            ).fetchone()
 
-        spot_row = conn.execute(
-            """
-            SELECT price, timestamp_utc
-            FROM market_ticks
-            WHERE symbol = 'JPY=X'
-            ORDER BY timestamp_utc DESC
-            LIMIT 1
-            """
-        ).fetchone()
+            spot_row = conn.execute(
+                """
+                SELECT price, timestamp_utc
+                FROM market_ticks
+                WHERE symbol = 'JPY=X' AND timestamp_utc <= ?
+                ORDER BY timestamp_utc DESC
+                LIMIT 1
+                """,
+                (normalized_as_of,),
+            ).fetchone()
+        else:
+            spread_row = conn.execute(
+                """
+                SELECT timestamp_utc, us_2y, us_10y, jp_10y, spread_10y, source
+                FROM yield_spreads
+                ORDER BY timestamp_utc DESC
+                LIMIT 1
+                """
+            ).fetchone()
+
+            spot_row = conn.execute(
+                """
+                SELECT price, timestamp_utc
+                FROM market_ticks
+                WHERE symbol = 'JPY=X'
+                ORDER BY timestamp_utc DESC
+                LIMIT 1
+                """
+            ).fetchone()
     finally:
         conn.close()
 
@@ -122,12 +177,20 @@ def get_upcoming_macro_events(
     impact: str | None = None,
     limit: int = 20,
     db_path: str | None = None,
+    as_of_utc: str | None = None,
+    past_hours: int = 4,
+    future_hours: int = 48,
 ) -> list[dict[str, Any]]:
     """
     Query scheduled economic calendar events from `macro_events`, optionally
-    filtered by currency (`USD` / `JPY`) and impact (`High` / `Medium` / `Low`),
+    filtered by currency (`USD` / `JPY`), impact (`High` / `Medium` / `Low`),
+    and a point-in-time window `[as_of_utc - past_hours, as_of_utc + future_hours]`,
     ordered chronologically (`timestamp_utc ASC`).
     """
+    normalized_as_of = _normalize_as_of_utc(as_of_utc)
+    past_h = _validate_non_negative_hours(past_hours, "past_hours")
+    future_h = _validate_non_negative_hours(future_hours, "future_hours")
+
     effective_limit = min(int(limit), _MAX_QUERY_LIMIT)
     if effective_limit <= 0:
         return []
@@ -142,6 +205,15 @@ def get_upcoming_macro_events(
     if impact and impact.strip():
         clauses.append("LOWER(impact) = LOWER(?)")
         params.append(impact.strip())
+
+    if normalized_as_of is not None:
+        as_of_dt = _parse_utc_str(normalized_as_of)
+        window_start = (as_of_dt - timedelta(hours=past_h)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        window_end = (as_of_dt + timedelta(hours=future_h)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        clauses.append("timestamp_utc >= ?")
+        params.append(window_start)
+        clauses.append("timestamp_utc <= ?")
+        params.append(window_end)
 
     where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     query = f"""
@@ -165,26 +237,54 @@ def get_recent_mof_alerts(
     min_tier: int = 1,
     limit: int = 20,
     db_path: str | None = None,
+    as_of_utc: str | None = None,
+    lookback_hours: int | None = None,
 ) -> list[dict[str, Any]]:
     """
     Query MoF / BoJ verbal intervention headlines where `matched_keywords != ''`,
     evaluate escalation tiers (1-4) using `NewsRSSCollector` regex taxonomy,
     filter to `tier >= min_tier`, and return newest alerts first.
+    When `as_of_utc` and/or `lookback_hours` are provided, restricts headlines to
+    `published_utc <= as_of_utc` and `published_utc >= anchor - lookback_hours`.
     """
+    normalized_as_of = _normalize_as_of_utc(as_of_utc)
+    lookback_h = (
+        _validate_non_negative_hours(lookback_hours, "lookback_hours")
+        if lookback_hours is not None
+        else None
+    )
+
     effective_limit = min(int(limit), _MAX_QUERY_LIMIT)
     if effective_limit <= 0:
         return []
 
+    clauses = ["matched_keywords IS NOT NULL", "TRIM(matched_keywords) != ''"]
+    params: list[Any] = []
+
+    if normalized_as_of is not None:
+        clauses.append("published_utc <= ?")
+        params.append(normalized_as_of)
+
+    if lookback_h is not None:
+        anchor_dt = (
+            _parse_utc_str(normalized_as_of)
+            if normalized_as_of is not None
+            else datetime.now(timezone.utc)
+        )
+        cutoff_utc = (anchor_dt - timedelta(hours=lookback_h)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        clauses.append("published_utc >= ?")
+        params.append(cutoff_utc)
+
+    query = f"""
+        SELECT url_hash, published_utc, source, title, url, matched_keywords
+        FROM news_headlines
+        WHERE {' AND '.join(clauses)}
+        ORDER BY published_utc DESC
+    """
+
     conn = get_readonly_connection(db_path)
     try:
-        rows = conn.execute(
-            """
-            SELECT url_hash, published_utc, source, title, url, matched_keywords
-            FROM news_headlines
-            WHERE matched_keywords IS NOT NULL AND TRIM(matched_keywords) != ''
-            ORDER BY published_utc DESC
-            """
-        ).fetchall()
+        rows = conn.execute(query, params).fetchall()
     finally:
         conn.close()
 
@@ -220,11 +320,15 @@ def get_recent_mof_alerts(
 def get_market_ticks_summary(
     symbols: list[str] | None = None,
     db_path: str | None = None,
+    as_of_utc: str | None = None,
 ) -> dict[str, Any]:
     """
     Return latest OHLCV snapshot and bar-over-bar change for core USD/JPY market
     indicators (`JPY=X`, `^TNX`, `^GSPC`, `^N225`, `^VIX`, `GC=F`) or caller-specified symbols.
+    When `as_of_utc` is set, considers only ticks at or before `as_of_utc`.
     """
+    normalized_as_of = _normalize_as_of_utc(as_of_utc)
+
     if symbols is None:
         target_symbols = list(CORE_TICKER_SYMBOLS)
     else:
@@ -239,16 +343,28 @@ def get_market_ticks_summary(
     conn = get_readonly_connection(db_path)
     try:
         for symbol in target_symbols:
-            rows = conn.execute(
-                """
-                SELECT symbol, timestamp_utc, price, open, high, low, volume
-                FROM market_ticks
-                WHERE symbol = ?
-                ORDER BY timestamp_utc DESC
-                LIMIT 2
-                """,
-                (symbol,),
-            ).fetchall()
+            if normalized_as_of is not None:
+                rows = conn.execute(
+                    """
+                    SELECT symbol, timestamp_utc, price, open, high, low, volume
+                    FROM market_ticks
+                    WHERE symbol = ? AND timestamp_utc <= ?
+                    ORDER BY timestamp_utc DESC
+                    LIMIT 2
+                    """,
+                    (symbol, normalized_as_of),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT symbol, timestamp_utc, price, open, high, low, volume
+                    FROM market_ticks
+                    WHERE symbol = ?
+                    ORDER BY timestamp_utc DESC
+                    LIMIT 2
+                    """,
+                    (symbol,),
+                ).fetchall()
 
             if not rows:
                 missing_symbols.append(symbol)
@@ -323,8 +439,10 @@ mcp_server = MCPServer(
     ),
     annotations=_READ_ONLY_TOOL_ANNOTATIONS,
 )
-def _tool_get_latest_yield_spread() -> dict[str, Any]:
-    return get_latest_yield_spread()
+def _tool_get_latest_yield_spread(
+    as_of_utc: str | None = None,
+) -> dict[str, Any]:
+    return get_latest_yield_spread(as_of_utc=as_of_utc)
 
 
 @mcp_server.tool(
@@ -341,11 +459,17 @@ def _tool_get_upcoming_macro_events(
     currency: str | None = None,
     impact: str | None = None,
     limit: int = 20,
+    as_of_utc: str | None = None,
+    past_hours: int = 4,
+    future_hours: int = 48,
 ) -> list[dict[str, Any]]:
     return get_upcoming_macro_events(
         currency=currency,
         impact=impact,
         limit=limit,
+        as_of_utc=as_of_utc,
+        past_hours=past_hours,
+        future_hours=future_hours,
     )
 
 
@@ -362,8 +486,15 @@ def _tool_get_upcoming_macro_events(
 def _tool_get_recent_mof_alerts(
     min_tier: int = 1,
     limit: int = 20,
+    as_of_utc: str | None = None,
+    lookback_hours: int | None = None,
 ) -> list[dict[str, Any]]:
-    return get_recent_mof_alerts(min_tier=min_tier, limit=limit)
+    return get_recent_mof_alerts(
+        min_tier=min_tier,
+        limit=limit,
+        as_of_utc=as_of_utc,
+        lookback_hours=lookback_hours,
+    )
 
 
 @mcp_server.tool(
@@ -378,8 +509,9 @@ def _tool_get_recent_mof_alerts(
 )
 def _tool_get_market_ticks_summary(
     symbols: list[str] | None = None,
+    as_of_utc: str | None = None,
 ) -> dict[str, Any]:
-    return get_market_ticks_summary(symbols=symbols)
+    return get_market_ticks_summary(symbols=symbols, as_of_utc=as_of_utc)
 
 
 def main() -> None:

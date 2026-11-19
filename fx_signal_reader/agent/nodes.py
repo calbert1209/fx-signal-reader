@@ -47,6 +47,7 @@ SPREAD_BEARISH_THRESHOLD = 1.0
 # High-impact event window & keywords for USD/JPY binary catalyst risk
 EVENT_WINDOW_PAST_HOURS = 4
 EVENT_WINDOW_FUTURE_HOURS = 48
+DEFAULT_PIT_MOF_LOOKBACK_HOURS = 48
 KEY_MACRO_EVENT_KEYWORDS: tuple[str, ...] = (
     "fomc",
     "cpi",
@@ -240,9 +241,21 @@ def _validate_node_update(state: AgentState, update: dict[str, Any]) -> None:
     validate_state_models(merged_preview)
 
 
+def _resolve_pit_as_of_utc(state: AgentState, point_in_time: bool) -> str | None:
+    """Validate and normalize `state['timestamp_utc']` strictly when `point_in_time=True`."""
+    if not point_in_time:
+        return None
+    raw_ts = state.get("timestamp_utc")
+    if isinstance(raw_ts, bool):
+        raise ValueError("state['timestamp_utc'] must be a valid timestamp string, not bool.")
+    return normalize_datetime_utc(raw_ts, fallback_now=False)
+
+
 def macro_analyst_node(
     state: AgentState,
     db_path: str | None = None,
+    point_in_time: bool = False,
+    mof_lookback_hours: int | None = None,
 ) -> dict[str, Any]:
     """
     Evaluate US-Japan yield differentials and high-impact macro calendar releases.
@@ -251,12 +264,18 @@ def macro_analyst_node(
     `mcp_server.get_upcoming_macro_events`, validates a `MacroAssessment` Pydantic
     model, and returns a partial `AgentState` update dict.
     """
-    spread_snapshot = get_latest_yield_spread(db_path=db_path)
+    _ = mof_lookback_hours
+    as_of_utc = _resolve_pit_as_of_utc(state, point_in_time)
+
+    spread_snapshot = get_latest_yield_spread(db_path=db_path, as_of_utc=as_of_utc)
     raw_events = get_upcoming_macro_events(
         currency=None,
         impact="High",
         limit=10,
         db_path=db_path,
+        as_of_utc=as_of_utc,
+        past_hours=EVENT_WINDOW_PAST_HOURS,
+        future_hours=EVENT_WINDOW_FUTURE_HOURS,
     )
     high_impact_events = [
         dict(event)
@@ -277,7 +296,11 @@ def macro_analyst_node(
     usdjpy_spot = _safe_float(spread_snapshot.get("usdjpy_spot"))
     resolved_spot = usdjpy_spot if usdjpy_spot is not None else _safe_float(state.get("spot_price"))
 
-    reference_ts_utc = normalize_datetime_utc(state.get("timestamp_utc"), fallback_now=True)
+    reference_ts_utc = (
+        as_of_utc
+        if as_of_utc is not None
+        else normalize_datetime_utc(state.get("timestamp_utc"), fallback_now=True)
+    )
     near_catalysts = _find_near_window_catalysts(high_impact_events, reference_ts_utc)
 
     yield_bias = _evaluate_yield_bias(spread_10y)
@@ -482,6 +505,8 @@ def _build_trade_proposal(
 def risk_committee_node(
     state: AgentState,
     db_path: str | None = None,
+    point_in_time: bool = False,
+    mof_lookback_hours: int | None = None,
 ) -> dict[str, Any]:
     """
     Evaluate cross-asset risk regime, MoF/BoJ verbal intervention hazard, and
@@ -492,8 +517,21 @@ def risk_committee_node(
     `TradeProposal`, runs `validate_state_models`, and returns a partial
     `AgentState` update dict.
     """
-    ticks_summary = get_market_ticks_summary(db_path=db_path)
-    mof_alerts = get_recent_mof_alerts(min_tier=1, limit=25, db_path=db_path)
+    as_of_utc = _resolve_pit_as_of_utc(state, point_in_time)
+    effective_lookback_hours = (
+        DEFAULT_PIT_MOF_LOOKBACK_HOURS
+        if (point_in_time and mof_lookback_hours is None)
+        else mof_lookback_hours
+    )
+
+    ticks_summary = get_market_ticks_summary(db_path=db_path, as_of_utc=as_of_utc)
+    mof_alerts = get_recent_mof_alerts(
+        min_tier=1,
+        limit=25,
+        db_path=db_path,
+        as_of_utc=as_of_utc,
+        lookback_hours=effective_lookback_hours,
+    )
 
     symbols_map = ticks_summary.get("symbols") or {}
     spot_from_ticks = _extract_symbol_close(symbols_map, "JPY=X")
@@ -571,7 +609,11 @@ def risk_committee_node(
     )
 
     run_id = str(state.get("run_id") or "").strip() or str(uuid.uuid4())
-    proposal_ts = normalize_datetime_utc(state.get("timestamp_utc"), fallback_now=True)
+    proposal_ts = (
+        as_of_utc
+        if as_of_utc is not None
+        else normalize_datetime_utc(state.get("timestamp_utc"), fallback_now=True)
+    )
     trade_proposal, approval_status = _build_trade_proposal(
         run_id=run_id,
         timestamp_utc=proposal_ts,
@@ -605,27 +647,42 @@ def risk_committee_node(
 
 def make_macro_analyst_node(
     db_path: str | None = None,
+    point_in_time: bool = False,
+    mof_lookback_hours: int | None = None,
 ) -> Callable[[AgentState], dict[str, Any]]:
-    """Create a `StateGraph`-compatible Macro Analyst node bound to `db_path`."""
+    """Create a `StateGraph`-compatible Macro Analyst node bound to `db_path` and PIT options."""
 
     def _macro_analyst(state: AgentState) -> dict[str, Any]:
-        return macro_analyst_node(state, db_path=db_path)
+        return macro_analyst_node(
+            state,
+            db_path=db_path,
+            point_in_time=point_in_time,
+            mof_lookback_hours=mof_lookback_hours,
+        )
 
     return _macro_analyst
 
 
 def make_risk_committee_node(
     db_path: str | None = None,
+    point_in_time: bool = False,
+    mof_lookback_hours: int | None = None,
 ) -> Callable[[AgentState], dict[str, Any]]:
-    """Create a `StateGraph`-compatible Risk Committee node bound to `db_path`."""
+    """Create a `StateGraph`-compatible Risk Committee node bound to `db_path` and PIT options."""
 
     def _risk_committee(state: AgentState) -> dict[str, Any]:
-        return risk_committee_node(state, db_path=db_path)
+        return risk_committee_node(
+            state,
+            db_path=db_path,
+            point_in_time=point_in_time,
+            mof_lookback_hours=mof_lookback_hours,
+        )
 
     return _risk_committee
 
 
 __all__ = [
+    "DEFAULT_PIT_MOF_LOOKBACK_HOURS",
     "macro_analyst_node",
     "make_macro_analyst_node",
     "make_risk_committee_node",
