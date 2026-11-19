@@ -32,6 +32,12 @@ from fx_signal_reader.agent.state import (
     validate_state_models,
 )
 from fx_signal_reader.core.normalizer import normalize_datetime_utc
+from fx_signal_reader.core.pair_profile import (
+    DEFAULT_PAIR,
+    PairProfile,
+    RiskPolicyType,
+    get_pair_profile,
+)
 from fx_signal_reader.mcp.server import (
     get_latest_yield_spread,
     get_market_ticks_summary,
@@ -45,7 +51,7 @@ from fx_signal_reader.mcp.server import (
 SPREAD_BULLISH_THRESHOLD = 2.0
 SPREAD_BEARISH_THRESHOLD = 1.0
 
-# High-impact event window & keywords for USD/JPY binary catalyst risk
+# High-impact event window & keywords for USD/JPY & EUR/USD binary catalyst risk
 EVENT_WINDOW_PAST_HOURS = 4
 EVENT_WINDOW_FUTURE_HOURS = 48
 DEFAULT_PIT_MOF_LOOKBACK_HOURS = 48
@@ -68,6 +74,27 @@ KEY_MACRO_EVENT_KEYWORDS: tuple[str, ...] = (
     "warsh",
     "powell",
     "ueda",
+    "ecb",
+    "lagarde",
+    "eurozone",
+    "bundesbank",
+    "schnabel",
+    "de guindos",
+    "nagel",
+    "villeroy",
+)
+
+TIER1_CENTRAL_BANK_KEYWORDS: tuple[str, ...] = (
+    "ecb",
+    "fomc",
+    "rate decision",
+    "policy rate",
+    "nfp",
+    "non-farm",
+    "nonfarm",
+    "cpi",
+    "flash cpi",
+    "hicp",
 )
 
 # Risk regime VIX boundaries
@@ -132,6 +159,47 @@ def compute_position_units(
     return max(0, units)
 
 
+def compute_bracket_distances(
+    profile: PairProfile | str = DEFAULT_PAIR,
+    atr_14: float | None = None,
+    *,
+    use_atr: bool = False,
+    sl_pips: float | None = None,
+    tp_pips: float | None = None,
+) -> tuple[float, float]:
+    """
+    Compute Stop Loss and Take Profit distances for a given pair profile.
+
+    When `use_atr=True` and a positive `atr_14` is available, clamps SL distance to
+    `[25 * pip_size, 250 * pip_size]` (0.25..2.50 JPY for USD/JPY, 0.0025..0.0250 for EUR/USD)
+    and targets a `2.0 * SL` Take Profit distance. Otherwise uses configured
+    `sl_pips`/`tp_pips` overrides or the profile's default SL/TP brackets.
+    """
+    p = get_pair_profile(profile)
+    pip_size = p.pip_size
+    prec = p.price_precision
+
+    if use_atr and atr_14 is not None and atr_14 > 0.0:
+        min_sl = 25.0 * pip_size
+        max_sl = 250.0 * pip_size
+        sl_dist = round(max(min_sl, min(max_sl, float(atr_14))), prec)
+        tp_dist = round(2.0 * sl_dist, prec)
+        return sl_dist, tp_dist
+
+    has_custom_sl = sl_pips is not None and sl_pips > 0.0
+    effective_sl_pips = float(sl_pips) if has_custom_sl else p.default_sl_pips
+    sl_dist = round(effective_sl_pips * pip_size, prec)
+
+    if tp_pips is not None and tp_pips > 0.0:
+        tp_dist = round(float(tp_pips) * pip_size, prec)
+    elif has_custom_sl:
+        tp_dist = round(2.0 * sl_dist, prec)
+    else:
+        tp_dist = round(p.default_tp_pips * pip_size, prec)
+
+    return sl_dist, tp_dist
+
+
 def compute_bracket_distances_jpy(
     atr_14: float | None = None,
     *,
@@ -140,26 +208,15 @@ def compute_bracket_distances_jpy(
     tp_pips: float | None = None,
 ) -> tuple[float, float]:
     """
-    Compute Stop Loss and Take Profit distances in JPY.
-
-    When `use_atr=True` and a positive `atr_14` is available, clamps SL distance to
-    `[0.25, 2.50]` JPY and targets a `2.0 * SL` Take Profit distance. Otherwise
-    uses configured `sl_pips`/`tp_pips` overrides or the default 0.75 / 1.50 JPY brackets.
+    Compute Stop Loss and Take Profit distances in JPY (backward-compatible wrapper).
     """
-    if use_atr and atr_14 is not None and atr_14 > 0.0:
-        sl_dist = round(max(0.25, min(2.50, float(atr_14))), 3)
-        tp_dist = round(2.0 * sl_dist, 3)
-        return sl_dist, tp_dist
-
-    has_custom_sl = sl_pips is not None and sl_pips > 0.0
-    sl_dist = round(float(sl_pips) * 0.01, 3) if has_custom_sl else STOP_LOSS_DISTANCE_JPY
-    if tp_pips is not None and tp_pips > 0.0:
-        tp_dist = round(float(tp_pips) * 0.01, 3)
-    elif has_custom_sl:
-        tp_dist = round(2.0 * sl_dist, 3)
-    else:
-        tp_dist = TAKE_PROFIT_DISTANCE_JPY
-    return sl_dist, tp_dist
+    return compute_bracket_distances(
+        profile=DEFAULT_PAIR,
+        atr_14=atr_14,
+        use_atr=use_atr,
+        sl_pips=sl_pips,
+        tp_pips=tp_pips,
+    )
 
 
 def _safe_float(value: Any) -> float | None:
@@ -219,14 +276,33 @@ def _find_near_window_catalysts(
     return near_events
 
 
-def _evaluate_yield_bias(spread_10y: float | None) -> YieldBias:
-    """Map US-Japan 10Y yield spread (percentage points) to directional YieldBias."""
+def _is_tier1_central_bank_catalyst(title: str) -> bool:
+    """Return True when an event matches a Tier-1 central bank catalyst (ECB/FOMC/NFP/CPI)."""
+    lowered = title.lower()
+    return any(keyword in lowered for keyword in TIER1_CENTRAL_BANK_KEYWORDS)
+
+
+def _evaluate_yield_bias(
+    spread_10y: float | None,
+    profile: PairProfile | None = None,
+) -> YieldBias:
+    """Map 10Y yield spread (base - quote) to directional YieldBias."""
     if spread_10y is None:
         return YieldBias.NEUTRAL
-    if spread_10y > SPREAD_BULLISH_THRESHOLD:
-        return YieldBias.BULLISH_USD
-    if spread_10y < SPREAD_BEARISH_THRESHOLD:
-        return YieldBias.BEARISH_USD
+    bullish_thresh = (
+        profile.spread_bullish_threshold
+        if (profile is not None and hasattr(profile, "spread_bullish_threshold"))
+        else SPREAD_BULLISH_THRESHOLD
+    )
+    bearish_thresh = (
+        profile.spread_bearish_threshold
+        if (profile is not None and hasattr(profile, "spread_bearish_threshold"))
+        else SPREAD_BEARISH_THRESHOLD
+    )
+    if spread_10y > bullish_thresh:
+        return YieldBias.BULLISH
+    if spread_10y < bearish_thresh:
+        return YieldBias.BEARISH
     return YieldBias.NEUTRAL
 
 
@@ -234,6 +310,7 @@ def _compute_macro_confidence(
     spread_10y: float | None,
     yield_bias: YieldBias,
     near_catalyst_count: int,
+    profile: PairProfile | None = None,
 ) -> float:
     """Compute bounded [0.0, 1.0] macro confidence from spread magnitude and event risk."""
     if spread_10y is None:
@@ -241,14 +318,26 @@ def _compute_macro_confidence(
         event_penalty = min(0.10, 0.05 * near_catalyst_count)
         return round(max(0.05, min(1.0, base_confidence - event_penalty)), 4)
 
-    if yield_bias == YieldBias.BULLISH_USD:
-        magnitude_bonus = min(0.25, (spread_10y - SPREAD_BULLISH_THRESHOLD) * 0.25)
+    bullish_thresh = (
+        profile.spread_bullish_threshold
+        if (profile is not None and hasattr(profile, "spread_bullish_threshold"))
+        else SPREAD_BULLISH_THRESHOLD
+    )
+    bearish_thresh = (
+        profile.spread_bearish_threshold
+        if (profile is not None and hasattr(profile, "spread_bearish_threshold"))
+        else SPREAD_BEARISH_THRESHOLD
+    )
+    midpoint = (bullish_thresh + bearish_thresh) / 2.0
+
+    if yield_bias in (YieldBias.BULLISH, YieldBias.BULLISH_USD):
+        magnitude_bonus = min(0.25, max(0.0, (spread_10y - bullish_thresh)) * 0.25)
         base_confidence = 0.65 + magnitude_bonus
-    elif yield_bias == YieldBias.BEARISH_USD:
-        magnitude_bonus = min(0.25, (SPREAD_BEARISH_THRESHOLD - spread_10y) * 0.25)
+    elif yield_bias in (YieldBias.BEARISH, YieldBias.BEARISH_USD):
+        magnitude_bonus = min(0.25, max(0.0, (bearish_thresh - spread_10y)) * 0.25)
         base_confidence = 0.65 + magnitude_bonus
     else:
-        distance_from_mid = abs(spread_10y - 1.5)
+        distance_from_mid = abs(spread_10y - midpoint)
         base_confidence = 0.55 - min(0.10, distance_from_mid * 0.20)
 
     event_penalty = min(0.15, 0.06 * near_catalyst_count)
@@ -265,31 +354,39 @@ def _format_macro_summary(
     near_catalysts: list[dict[str, Any]],
     spread_momentum: str | None = None,
     downgraded_from_bullish: bool = False,
+    profile: PairProfile | None = None,
 ) -> str:
     """Build a concise human-readable macro policy divergence summary."""
+    p_name = profile.pair if profile is not None else DEFAULT_PAIR
+    is_uj = p_name == "USD/JPY"
+    pair_label = "US-JP" if is_uj else p_name
+    base_lbl = "US10Y" if is_uj else f"{profile.base_currency}10Y" if profile else "Base10Y"
+    quote_lbl = "JP10Y" if is_uj else f"{profile.quote_currency}10Y" if profile else "Quote10Y"
+
     if spread_10y is None:
-        spread_desc = "US-JP 10Y yield spread data unavailable; defaulting to NEUTRAL bias."
+        spread_desc = f"{pair_label} 10Y yield spread data unavailable; defaulting to NEUTRAL bias."
     else:
         bps_text = f"{spread_bps:.1f} bps" if spread_bps is not None else "n/a bps"
         us_text = f"{us_10y:.3f}%" if us_10y is not None else "n/a"
         jp_text = f"{jp_10y:.3f}%" if jp_10y is not None else "n/a"
         if downgraded_from_bullish:
+            bias_name = "BULLISH_USD" if is_uj else "BULLISH"
             spread_desc = (
-                f"US-JP 10Y spread at {spread_10y:.3f}% ({bps_text}; "
-                f"US10Y={us_text}, JP10Y={jp_text}) but carry compression "
-                f"({spread_momentum}) downgrades BULLISH_USD to NEUTRAL."
+                f"{pair_label} 10Y spread at {spread_10y:.3f}% ({bps_text}; "
+                f"{base_lbl}={us_text}, {quote_lbl}={jp_text}) but carry compression "
+                f"({spread_momentum}) downgrades {bias_name} to NEUTRAL."
             )
         else:
             momentum_note = f" [momentum={spread_momentum}]" if spread_momentum else ""
             spread_desc = (
-                f"US-JP 10Y spread at {spread_10y:.3f}% ({bps_text}; "
-                f"US10Y={us_text}, JP10Y={jp_text}){momentum_note} implies {yield_bias.value}."
+                f"{pair_label} 10Y spread at {spread_10y:.3f}% ({bps_text}; "
+                f"{base_lbl}={us_text}, {quote_lbl}={jp_text}){momentum_note} implies {yield_bias.value}."
             )
 
     if near_catalysts:
         titles = ", ".join(str(ev.get("title", "Unnamed")) for ev in near_catalysts[:3])
         event_desc = (
-            f" {len(near_catalysts)} imminent key USD/JPY catalyst(s) near window "
+            f" {len(near_catalysts)} imminent key {p_name} catalyst(s) near window "
             f"[{titles}] dampen directional confidence."
         )
     elif events:
@@ -298,7 +395,7 @@ def _format_macro_summary(
             f"none inside the immediate {EVENT_WINDOW_FUTURE_HOURS}h catalyst window."
         )
     else:
-        event_desc = " No high-impact USD/JPY calendar releases queued."
+        event_desc = f" No high-impact {p_name} calendar releases queued."
 
     return f"{spread_desc}{event_desc}"
 
@@ -338,8 +435,13 @@ def macro_analyst_node(
     """
     _ = mof_lookback_hours
     as_of_utc = _resolve_pit_as_of_utc(state, point_in_time)
+    profile = get_pair_profile(state.get("pair") or DEFAULT_PAIR)
 
-    spread_snapshot = get_latest_yield_spread(db_path=db_path, as_of_utc=as_of_utc)
+    spread_snapshot = get_latest_yield_spread(
+        db_path=db_path,
+        as_of_utc=as_of_utc,
+        spot_symbol=profile.spot_symbol,
+    )
     raw_events = get_upcoming_macro_events(
         currency=None,
         impact="High",
@@ -349,10 +451,11 @@ def macro_analyst_node(
         past_hours=EVENT_WINDOW_PAST_HOURS,
         future_hours=EVENT_WINDOW_FUTURE_HOURS,
     )
+    allowed_currencies = {c.upper() for c in profile.calendar_currencies} | {""}
     high_impact_events = [
         dict(event)
         for event in raw_events
-        if str(event.get("currency") or "").upper() in {"USD", "JPY", ""}
+        if str(event.get("currency") or "").upper() in allowed_currencies
     ]
 
     us_10y = _safe_float(spread_snapshot.get("us_10y"))
@@ -365,8 +468,12 @@ def macro_analyst_node(
     if spread_bps is None and spread_10y is not None:
         spread_bps = round(spread_10y * 100.0, 2)
 
-    usdjpy_spot = _safe_float(spread_snapshot.get("usdjpy_spot"))
-    resolved_spot = usdjpy_spot if usdjpy_spot is not None else _safe_float(state.get("spot_price"))
+    spot_cand = _safe_float(spread_snapshot.get("spot_price"))
+    if spot_cand is None:
+        spot_cand = _safe_float(spread_snapshot.get("usdjpy_spot"))
+    if spot_cand is None:
+        spot_cand = _safe_float(state.get("spot_price"))
+    resolved_spot = spot_cand
 
     reference_ts_utc = (
         as_of_utc
@@ -380,9 +487,10 @@ def macro_analyst_node(
     raw_momentum = spread_snapshot.get("momentum") or spread_snapshot.get("spread_momentum")
     spread_momentum = str(raw_momentum) if raw_momentum is not None else None
 
-    raw_yield_bias = _evaluate_yield_bias(spread_10y)
+    raw_yield_bias = _evaluate_yield_bias(spread_10y, profile=profile)
     downgraded_from_bullish = (
-        raw_yield_bias == YieldBias.BULLISH_USD and spread_momentum == "CONTRACTING"
+        raw_yield_bias in (YieldBias.BULLISH, YieldBias.BULLISH_USD)
+        and spread_momentum == "CONTRACTING"
     )
     yield_bias = YieldBias.NEUTRAL if downgraded_from_bullish else raw_yield_bias
 
@@ -390,6 +498,7 @@ def macro_analyst_node(
         spread_10y=spread_10y,
         yield_bias=yield_bias,
         near_catalyst_count=len(near_catalysts),
+        profile=profile,
     )
     summary = _format_macro_summary(
         yield_bias=yield_bias,
@@ -401,6 +510,7 @@ def macro_analyst_node(
         near_catalysts=near_catalysts,
         spread_momentum=spread_momentum,
         downgraded_from_bullish=downgraded_from_bullish,
+        profile=profile,
     )
 
     assessment = MacroAssessment(
@@ -523,12 +633,14 @@ def _build_trade_proposal(
     spot_price: float | None,
     yield_bias: YieldBias,
     risk_assessment: RiskAssessment,
+    pair: str | PairProfile = DEFAULT_PAIR,
     account_capital_usd: float = DEFAULT_ACCOUNT_CAPITAL_USD,
     risk_fraction: float = DEFAULT_RISK_FRACTION,
     stop_loss_distance_jpy: float = STOP_LOSS_DISTANCE_JPY,
     take_profit_distance_jpy: float = TAKE_PROFIT_DISTANCE_JPY,
 ) -> tuple[TradeProposal, str]:
     """Synthesize a Pydantic-validated `TradeProposal` and initial `ApprovalStatus`."""
+    profile = get_pair_profile(pair)
     proposal_id = f"prop-{run_id}"
     regime = risk_assessment.risk_regime
     score = risk_assessment.intervention_risk_score
@@ -544,7 +656,7 @@ def _build_trade_proposal(
         if yield_bias == YieldBias.NEUTRAL:
             reasons.append("macro yield bias is NEUTRAL")
         if spot_price is None:
-            reasons.append("USD/JPY spot price unavailable")
+            reasons.append(f"{profile.pair} spot price unavailable")
 
         proposal = TradeProposal(
             proposal_id=proposal_id,
@@ -562,18 +674,20 @@ def _build_trade_proposal(
         )
         return proposal, ApprovalStatus.NOT_REQUIRED.value
 
-    entry_price = round(spot_price, 3)
+    prec = profile.price_precision
+    entry_price = round(spot_price, prec)
     units = compute_position_units(
         spot_price=entry_price,
         stop_loss_distance_jpy=stop_loss_distance_jpy,
         account_capital_usd=account_capital_usd,
         risk_fraction=risk_fraction,
+        is_quote_usd=profile.is_quote_usd,
     )
-    is_bullish = yield_bias == YieldBias.BULLISH_USD
+    is_bullish = yield_bias in (YieldBias.BULLISH, YieldBias.BULLISH_USD)
     direction = 1 if is_bullish else -1
     action = TradeAction.BUY if is_bullish else TradeAction.SELL
-    stop_loss = round(entry_price - direction * stop_loss_distance_jpy, 3)
-    take_profit = round(entry_price + direction * take_profit_distance_jpy, 3)
+    stop_loss = round(entry_price - direction * stop_loss_distance_jpy, prec)
+    take_profit = round(entry_price + direction * take_profit_distance_jpy, prec)
     risk_reward_ratio = (
         round(take_profit_distance_jpy / stop_loss_distance_jpy, 4)
         if stop_loss_distance_jpy > 0.0
@@ -581,8 +695,8 @@ def _build_trade_proposal(
     )
     dollar_risk = account_capital_usd * risk_fraction
     rationale = (
-        f"{action.value} USD/JPY at {entry_price:.3f} "
-        f"(SL {stop_loss:.3f}, TP {take_profit:.3f}, {risk_reward_ratio:.2g} R:R): "
+        f"{action.value} {profile.pair} at {entry_price:.{prec}f} "
+        f"(SL {stop_loss:.{prec}f}, TP {take_profit:.{prec}f}, {risk_reward_ratio:.2g} R:R): "
         f"macro bias {yield_bias.value} with fixed-dollar risk sizing "
         f"({units:,} units risking ${dollar_risk:.2f} / {risk_fraction * 100:.1f}%) "
         f"and manageable intervention risk ({score:.2f}/100)."
@@ -626,8 +740,18 @@ def risk_committee_node(
         if (point_in_time and mof_lookback_hours is None)
         else mof_lookback_hours
     )
+    profile = get_pair_profile(state.get("pair") or DEFAULT_PAIR)
 
-    ticks_summary = get_market_ticks_summary(db_path=db_path, as_of_utc=as_of_utc)
+    symbols_to_fetch = (
+        None
+        if profile.pair == "USD/JPY"
+        else [profile.spot_symbol, "^TNX", profile.equity_benchmark, "^GSPC", "^VIX", "GC=F"]
+    )
+    ticks_summary = get_market_ticks_summary(
+        symbols=symbols_to_fetch,
+        db_path=db_path,
+        as_of_utc=as_of_utc,
+    )
     mof_alerts = get_recent_mof_alerts(
         min_tier=1,
         limit=25,
@@ -635,7 +759,11 @@ def risk_committee_node(
         as_of_utc=as_of_utc,
         lookback_hours=effective_lookback_hours,
     )
-    trend_summary = get_market_trend_summary(symbol="JPY=X", db_path=db_path, as_of_utc=as_of_utc)
+    trend_summary = get_market_trend_summary(
+        symbol=profile.spot_symbol,
+        db_path=db_path,
+        as_of_utc=as_of_utc,
+    )
     ema_50 = _safe_float(trend_summary.get("ema_50"))
     sma_200 = _safe_float(trend_summary.get("sma_200"))
     atr_14 = _safe_float(trend_summary.get("atr_14"))
@@ -643,7 +771,7 @@ def risk_committee_node(
     market_trend = str(raw_trend) if raw_trend is not None else None
 
     symbols_map = ticks_summary.get("symbols") or {}
-    spot_from_ticks = _extract_symbol_close(symbols_map, "JPY=X")
+    spot_from_ticks = _extract_symbol_close(symbols_map, profile.spot_symbol)
     spot_price = (
         spot_from_ticks
         if spot_from_ticks is not None
@@ -651,14 +779,47 @@ def risk_committee_node(
     )
     vix_level = _extract_symbol_close(symbols_map, "^VIX")
     sp500_price = _extract_symbol_close(symbols_map, "^GSPC")
-    nikkei_price = _extract_symbol_close(symbols_map, "^N225")
+    nikkei_price = _extract_symbol_close(symbols_map, profile.equity_benchmark)
     gold_price = _extract_symbol_close(symbols_map, "GC=F")
 
     risk_regime = _evaluate_risk_regime(vix_level)
-    highest_tier, intervention_score, alert_level, breakdown = _compute_intervention_metrics(
-        mof_alerts=mof_alerts,
-        spot_price=spot_price,
+
+    proposal_ts = (
+        as_of_utc
+        if as_of_utc is not None
+        else normalize_datetime_utc(state.get("timestamp_utc"), fallback_now=True)
     )
+
+    if profile.risk_policy == RiskPolicyType.VERBAL_LADDER:
+        highest_tier, intervention_score, alert_level, breakdown = _compute_intervention_metrics(
+            mof_alerts=mof_alerts,
+            spot_price=spot_price,
+        )
+        is_event_blackout = False
+        blackout_matches: list[dict[str, Any]] = []
+    else:
+        highest_tier = 0
+        intervention_score = 0.0
+        alert_level = InterventionAlertLevel.NONE
+        breakdown = {"base_score": 0.0, "volume_bonus": 0.0, "spot_bonus": 0.0}
+
+        upcoming_blackout = get_upcoming_macro_events(
+            currency=None,
+            impact="High",
+            limit=25,
+            db_path=db_path,
+            as_of_utc=proposal_ts,
+            past_hours=4,
+            future_hours=4,
+        )
+        allowed_ccys = {c.upper() for c in profile.calendar_currencies} | {""}
+        blackout_matches = [
+            ev
+            for ev in upcoming_blackout
+            if str(ev.get("currency") or "").upper() in allowed_ccys
+            and _is_tier1_central_bank_catalyst(str(ev.get("title") or ""))
+        ]
+        is_event_blackout = len(blackout_matches) > 0
 
     raw_bias = state.get("yield_bias") or YieldBias.NEUTRAL.value
     try:
@@ -678,7 +839,7 @@ def risk_committee_node(
         is_disallowed_regime = False
 
     is_falling_knife = bool(
-        yield_bias == YieldBias.BULLISH_USD
+        (yield_bias in (YieldBias.BULLISH, YieldBias.BULLISH_USD))
         and spot_price is not None
         and ema_50 is not None
         and spot_price < ema_50
@@ -689,6 +850,7 @@ def risk_committee_node(
         or is_risk_off
         or is_disallowed_regime
         or is_falling_knife
+        or is_event_blackout
     )
 
     flagged_headlines = [
@@ -704,8 +866,9 @@ def risk_committee_node(
         for alert in mof_alerts[:10]
     ]
 
+    prec = profile.price_precision
     vix_text = f"{vix_level:.2f}" if vix_level is not None else "n/a"
-    spot_text = f"{spot_price:.3f}" if spot_price is not None else "n/a"
+    spot_text = f"{spot_price:.{prec}f}" if spot_price is not None else "n/a"
     veto_reasons: list[str] = []
     if intervention_score >= INTERVENTION_VETO_SCORE:
         veto_reasons.append(f"intervention score {intervention_score:.2f} >= {INTERVENTION_VETO_SCORE}")
@@ -716,16 +879,27 @@ def risk_committee_node(
     if is_disallowed_regime and not is_risk_off:
         veto_reasons.append(f"regime {risk_regime.value} excluded by allowed_regimes")
     if is_falling_knife and spot_price is not None and ema_50 is not None:
-        veto_reasons.append(f"trend filter veto (spot {spot_price:.3f} < EMA-50 {ema_50:.3f})")
+        veto_reasons.append(f"trend filter veto (spot {spot_price:.{prec}f} < EMA-50 {ema_50:.{prec}f})")
+    if is_event_blackout and blackout_matches:
+        veto_reasons.append(
+            f"event blackout (catalyst '{blackout_matches[0].get('title', 'Tier-1 release')}' within ±4h)"
+        )
     veto_suffix = f" [{'; '.join(veto_reasons)}]" if veto_reasons else ""
 
-    risk_notes = (
-        f"Regime={risk_regime.value} (VIX={vix_text}); USD/JPY spot={spot_text}; "
-        f"MoF Tier {highest_tier} across {len(mof_alerts)} alert(s) -> "
-        f"score={intervention_score:.2f} [{alert_level.value}] "
-        f"(base={breakdown['base_score']:.1f}, volume={breakdown['volume_bonus']:.1f}, "
-        f"spot={breakdown['spot_bonus']:.1f}); veto_trade={veto_trade}{veto_suffix}."
-    )
+    if profile.risk_policy == RiskPolicyType.VERBAL_LADDER:
+        risk_notes = (
+            f"Regime={risk_regime.value} (VIX={vix_text}); USD/JPY spot={spot_text}; "
+            f"MoF Tier {highest_tier} across {len(mof_alerts)} alert(s) -> "
+            f"score={intervention_score:.2f} [{alert_level.value}] "
+            f"(base={breakdown['base_score']:.1f}, volume={breakdown['volume_bonus']:.1f}, "
+            f"spot={breakdown['spot_bonus']:.1f}); veto_trade={veto_trade}{veto_suffix}."
+        )
+    else:
+        risk_notes = (
+            f"Regime={risk_regime.value} (VIX={vix_text}); {profile.pair} spot={spot_text}; "
+            f"policy=CENTRAL_BANK; event_blackout={is_event_blackout} ({len(blackout_matches)} catalyst(s)); "
+            f"veto_trade={veto_trade}{veto_suffix}."
+        )
 
     risk_assessment = RiskAssessment(
         risk_regime=risk_regime,
@@ -746,16 +920,12 @@ def risk_committee_node(
     )
 
     run_id = str(state.get("run_id") or "").strip() or str(uuid.uuid4())
-    proposal_ts = (
-        as_of_utc
-        if as_of_utc is not None
-        else normalize_datetime_utc(state.get("timestamp_utc"), fallback_now=True)
-    )
     account_capital_usd = (
         _safe_float(state.get("account_capital_usd")) or DEFAULT_ACCOUNT_CAPITAL_USD
     )
     risk_fraction = _safe_float(state.get("risk_fraction")) or DEFAULT_RISK_FRACTION
-    sl_dist, tp_dist = compute_bracket_distances_jpy(
+    sl_dist, tp_dist = compute_bracket_distances(
+        profile=profile,
         atr_14=atr_14,
         use_atr=bool(state.get("use_atr")),
         sl_pips=_safe_float(state.get("sl_pips")),
@@ -767,6 +937,7 @@ def risk_committee_node(
         spot_price=spot_price,
         yield_bias=yield_bias,
         risk_assessment=risk_assessment,
+        pair=profile,
         account_capital_usd=account_capital_usd,
         risk_fraction=risk_fraction,
         stop_loss_distance_jpy=sl_dist,

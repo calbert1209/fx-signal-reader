@@ -36,6 +36,8 @@ class PairProfile:
     calendar_currencies: Set[str] = field(default_factory=set)
     risk_policy: RiskPolicyType = RiskPolicyType.CENTRAL_BANK
     psychological_barriers: List[float] = field(default_factory=list)
+    spread_bullish_threshold: float = 2.0
+    spread_bearish_threshold: float = 1.0
 
     @property
     def is_quote_usd(self) -> bool:
@@ -63,6 +65,8 @@ PAIR_PROFILES: Dict[str, PairProfile] = {
         calendar_currencies={"USD", "JPY"},
         risk_policy=RiskPolicyType.VERBAL_LADDER,
         psychological_barriers=[157.0, 158.5, 160.0],
+        spread_bullish_threshold=2.0,
+        spread_bearish_threshold=1.0,
     ),
     "EUR/USD": PairProfile(
         pair="EUR/USD",
@@ -80,6 +84,8 @@ PAIR_PROFILES: Dict[str, PairProfile] = {
         calendar_currencies={"EUR", "USD"},
         risk_policy=RiskPolicyType.CENTRAL_BANK,
         psychological_barriers=[1.0000, 1.0500, 1.1000],
+        spread_bullish_threshold=-1.0,
+        spread_bearish_threshold=-2.0,
     ),
 }
 

@@ -109,13 +109,15 @@ def _validate_non_negative_hours(value: int | float, name: str) -> float:
 def get_latest_yield_spread(
     db_path: str | None = None,
     as_of_utc: str | None = None,
+    spot_symbol: str = "JPY=X",
 ) -> dict[str, Any]:
     """
     Return the latest US-Japan sovereign yield spread snapshot along with the
-    most recent USD/JPY (`JPY=X`) spot tick from `market_ticks` and spread momentum.
+    most recent spot tick from `market_ticks` and spread momentum.
     When `as_of_utc` is set, restricts both queries to rows at or before `as_of_utc`.
     """
     normalized_as_of = _normalize_as_of_utc(as_of_utc)
+    clean_spot_sym = (spot_symbol or "").strip() or "JPY=X"
     conn = get_readonly_connection(db_path)
     try:
         if normalized_as_of is not None:
@@ -132,14 +134,25 @@ def get_latest_yield_spread(
 
             spot_row = conn.execute(
                 """
-                SELECT price, timestamp_utc
+                SELECT price, timestamp_utc, symbol
                 FROM market_ticks
-                WHERE symbol = 'JPY=X' AND timestamp_utc <= ?
+                WHERE symbol = ? AND timestamp_utc <= ?
                 ORDER BY timestamp_utc DESC
                 LIMIT 1
                 """,
-                (normalized_as_of,),
+                (clean_spot_sym, normalized_as_of),
             ).fetchone()
+            if spot_row is None and clean_spot_sym == "JPY=X":
+                spot_row = conn.execute(
+                    """
+                    SELECT price, timestamp_utc, symbol
+                    FROM market_ticks
+                    WHERE symbol = 'EURUSD=X' AND timestamp_utc <= ?
+                    ORDER BY timestamp_utc DESC
+                    LIMIT 1
+                    """,
+                    (normalized_as_of,),
+                ).fetchone()
         else:
             spread_rows = conn.execute(
                 """
@@ -152,13 +165,24 @@ def get_latest_yield_spread(
 
             spot_row = conn.execute(
                 """
-                SELECT price, timestamp_utc
+                SELECT price, timestamp_utc, symbol
                 FROM market_ticks
-                WHERE symbol = 'JPY=X'
+                WHERE symbol = ?
                 ORDER BY timestamp_utc DESC
                 LIMIT 1
-                """
+                """,
+                (clean_spot_sym,),
             ).fetchone()
+            if spot_row is None and clean_spot_sym == "JPY=X":
+                spot_row = conn.execute(
+                    """
+                    SELECT price, timestamp_utc, symbol
+                    FROM market_ticks
+                    WHERE symbol = 'EURUSD=X'
+                    ORDER BY timestamp_utc DESC
+                    LIMIT 1
+                    """,
+                ).fetchone()
     finally:
         conn.close()
 
@@ -201,6 +225,8 @@ def get_latest_yield_spread(
         "source": spread_row["source"] if spread_row else None,
         "usdjpy_spot": spot_row["price"] if spot_row else None,
         "usdjpy_timestamp_utc": spot_row["timestamp_utc"] if spot_row else None,
+        "spot_price": spot_row["price"] if spot_row else None,
+        "spot_symbol": spot_row["symbol"] if spot_row else clean_spot_sym,
     }
 
 
