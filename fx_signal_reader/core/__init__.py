@@ -22,11 +22,26 @@ from fx_signal_reader.core.indicators import (
     compute_true_ranges,
 )
 
+from fx_signal_reader.core.pair_profile import (
+    DEFAULT_PAIR,
+    PAIR_PROFILES,
+    PairProfile,
+    RiskPolicyType,
+    get_pair_db_path,
+    get_pair_profile,
+)
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "usdjpy_signals.db"
 DEFAULT_SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
 
 __all__ = [
+    "DEFAULT_PAIR",
+    "PAIR_PROFILES",
+    "PairProfile",
+    "RiskPolicyType",
+    "get_pair_db_path",
+    "get_pair_profile",
     "DEFAULT_ATR_PERIOD",
     "DEFAULT_DB_PATH",
     "DEFAULT_EMA_PERIOD",
