@@ -8,4 +8,6 @@ __pycache__/
 build/
 dist/
 data/*.db*
+data/*.csv
+.env
 .DS_Store
