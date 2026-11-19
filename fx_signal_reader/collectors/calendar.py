@@ -3,7 +3,7 @@ Economic Calendar Collector for USD/JPY Signal Reader.
 Ingests weekly Forex Factory calendar events:
   - Fetches live JSON endpoint with exponential retry
   - Falls back to local cached JSON (data/raw_calendar_thisweek.json) or live XML
-  - Filters strictly for USD and JPY economic releases
+  - Filters strictly for the pair's calendar currencies (USD/JPY by default; EUR/USD adds EUR)
   - Normalizes timestamps to ISO-8601 UTC and generates deterministic SHA256 hashes
   - Writes to SQLite table `macro_events` with primary key deduplication.
 """
@@ -16,12 +16,13 @@ import re
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import requests
 
 from fx_signal_reader.collectors.base import BaseCollector
 from fx_signal_reader.core import DEFAULT_DB_PATH, DEFAULT_SCHEMA_PATH, PROJECT_ROOT
+from fx_signal_reader.core.pair_profile import get_pair_profile
 
 
 class CalendarCollector(BaseCollector):
@@ -42,6 +43,8 @@ class CalendarCollector(BaseCollector):
         backoff_factor: float = 1.0,
         jitter: bool = True,
         timeout: float = 12.0,
+        pair: str = "USD/JPY",
+        currencies: Optional[Iterable[str]] = None,
     ) -> None:
         super().__init__(
             db_path=db_path,
@@ -52,6 +55,15 @@ class CalendarCollector(BaseCollector):
             timeout=timeout,
         )
         self.cache_path = Path(cache_path)
+        self.pair_profile = get_pair_profile(pair)
+        self.pair = self.pair_profile.pair
+        self.currencies: Set[str] = self._normalize_currencies(
+            currencies if currencies else self.pair_profile.calendar_currencies
+        )
+
+    @staticmethod
+    def _normalize_currencies(currencies: Iterable[str]) -> Set[str]:
+        return {c.strip().upper() for c in currencies if c and c.strip()}
 
     @staticmethod
     def parse_json_timestamp(date_str: str) -> str:
@@ -171,21 +183,33 @@ class CalendarCollector(BaseCollector):
             "All calendar sources (live JSON, local cache, XML) failed."
         )
 
-    def collect(self) -> Dict[str, Any]:
+    def collect(self, currencies: Optional[Iterable[str]] = None) -> Dict[str, Any]:
         """
-        Parses calendar releases, filters USD/JPY events, and inserts into `macro_events`.
+        Parses calendar releases, filters events for the pair's currencies
+        (or an explicit ``currencies`` override), and inserts into `macro_events`.
         """
+        target_currencies = (
+            self._normalize_currencies(currencies) if currencies else self.currencies
+        )
+        # Ordered: base currency, quote currency, then any others alphabetically.
+        ordered_currencies = sorted(
+            target_currencies,
+            key=lambda c: (
+                c != self.pair_profile.base_currency,
+                c != self.pair_profile.quote_currency,
+                c,
+            ),
+        )
         raw_events, source_used = self.fetch_feed_data()
         conn = self.get_connection()
 
         mapped_events: List[Dict[str, Any]] = []
-        usd_count = 0
-        jpy_count = 0
+        currency_counts: Dict[str, int] = {c: 0 for c in ordered_currencies}
         impact_distribution: Dict[str, int] = {}
 
         for item in raw_events:
             curr = (item.get("country") or item.get("currency") or "").strip().upper()
-            if curr not in ("USD", "JPY"):
+            if curr not in target_currencies:
                 continue
 
             raw_date = item.get("date") or ""
@@ -217,10 +241,7 @@ class CalendarCollector(BaseCollector):
 
             event_hash = self.generate_event_hash(timestamp_utc, curr, title)
 
-            if curr == "USD":
-                usd_count += 1
-            else:
-                jpy_count += 1
+            currency_counts[curr] += 1
             impact_distribution[impact] = impact_distribution.get(impact, 0) + 1
 
             mapped_events.append(
@@ -252,18 +273,18 @@ class CalendarCollector(BaseCollector):
         total_in_db = cur.fetchone()[0]
         conn.close()
 
-        summary = {
+        summary: Dict[str, Any] = {
             "status": "SUCCESS",
             "source_used": source_used,
             "total_feed_events": len(raw_events),
-            "usd_jpy_events_inserted": len(mapped_events),
+            f"{self.pair.lower().replace('/', '_')}_events_inserted": len(mapped_events),
             "db_macro_events_rows": total_in_db,
-            "usd_events": usd_count,
-            "jpy_events": jpy_count,
-            "impact_distribution": impact_distribution,
         }
+        for c in ordered_currencies:
+            summary[f"{c.lower()}_events"] = currency_counts[c]
+        summary["impact_distribution"] = impact_distribution
         self.logger.info(
-            f"Calendar collection complete: {len(mapped_events)} USD/JPY events written "
+            f"Calendar collection complete: {len(mapped_events)} {self.pair} events written "
             f"({total_in_db} total in DB, source: {source_used})"
         )
         return summary

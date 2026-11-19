@@ -7,6 +7,9 @@ Ingests:
 Applies:
   - 4-Tier Verbal Intervention Escalation Ladder regex engine
   - Entity recognition for Japanese policymakers (Mimura, Kanda, Kato, Suzuki, Ueda)
+  - EUR/USD (``pair="EUR/USD"``): ECB press RSS, Google News EUR/USD feed, European
+    policymaker entities (Lagarde, Schnabel, de Guindos, Nagel, Villeroy) and
+    ECB/Fed policy-divergence keywords (feeds/entities only; the MoF ladder is unchanged)
 Writes:
   - news_headlines table with deterministic SHA256 url_hash deduplication.
 """
@@ -25,6 +28,7 @@ from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
 
 from fx_signal_reader.collectors.base import BaseCollector
+from fx_signal_reader.core.pair_profile import get_pair_profile
 
 
 class NewsRSSCollector(BaseCollector):
@@ -220,6 +224,77 @@ class NewsRSSCollector(BaseCollector):
         ],
     }
 
+    # ------------------------------------------------------------------
+    # EUR/USD additions (P8-04). The USD/JPY registries above are untouched.
+    # ------------------------------------------------------------------
+    # Pair-agnostic wires shared with the USD/JPY registry (by feed id).
+    SHARED_FEED_IDS = ("fxstreet_news", "investing_forex", "marketwatch_realtime")
+
+    EUR_FEED_REGISTRY = [
+        {
+            "id": "ecb_press",
+            "name": "European Central Bank Official Press Releases",
+            "url": "https://www.ecb.europa.eu/rss/press.html",
+            "source": "European Central Bank",
+            "type": "rss",
+        },
+        {
+            "id": "google_news_eurusd",
+            "name": "Google News EUR/USD & ECB Rate Decision",
+            "url": "https://news.google.com/rss/search?q=EURUSD+OR+%22EUR/USD%22+OR+%22ECB+rate+decision%22&hl=en-US&gl=US&ceid=US:en",
+            "source": "Google News FX",
+            "type": "rss",
+        },
+    ]
+
+    EUR_KEY_ENTITIES: Dict[str, List[Tuple[str, str]]] = {
+        "institutions": [
+            (r"\bEuropean Central Bank\b", "European Central Bank"),
+            (r"\bECB\b", "ECB"),
+            (r"\b(?:Federal Reserve|FOMC)\b", "Federal Reserve"),
+        ],
+        "officials": [
+            (r"\b(?:Christine )?Lagarde\b", "Lagarde"),
+            (r"\b(?:Isabel )?Schnabel\b", "Schnabel"),
+            (r"\b(?:Luis )?de Guindos\b", "de Guindos"),
+            (r"\b(?:Joachim )?Nagel\b", "Nagel"),
+            (r"\b(?:Fran[cç]ois )?Villeroy(?: de Galhau)?\b", "Villeroy"),
+            (r"\b(?:Jerome )?Powell\b", "Powell"),
+        ],
+    }
+
+    # ECB/Fed policy-divergence keywords (informational; they do not change the tier).
+    POLICY_DIVERGENCE_KEYWORDS: List[Tuple[str, str]] = [
+        (r"\bpolicy divergence\b", "policy divergence"),
+        (r"\b(?:ECB|Fed)[-/ ](?:Fed|ECB) divergence\b", "ECB/Fed divergence"),
+        (r"\bdivergen(?:ce|t) (?:in |of )?(?:monetary |rate |interest rate )?(?:policy|policies|paths?|outlooks?|expectations)\b", "policy divergence"),
+        (r"\b(?:ECB|Fed|central banks?) (?:diverg(?:e|es|ing|ed))\b", "central bank divergence"),
+        (r"\brate (?:cut|hike|decision)s?\b", "rate decision"),
+        (r"\b(?:hawkish|dovish)\b", "hawkish/dovish"),
+        (r"\byield (?:spread|differential|gap)\b", "yield differential"),
+        (r"\b(?:rate|interest rate) differentials?\b", "rate differential"),
+        (r"\bdeposit (?:facility )?rate\b", "deposit facility rate"),
+        (r"\bquantitative tightening\b", "quantitative tightening"),
+    ]
+
+    def __init__(self, *args: Any, pair: str = "USD/JPY", **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.pair_profile = get_pair_profile(pair)
+        self.pair = self.pair_profile.pair
+        if self.pair == "USD/JPY":
+            # Identical to the historical class-level configuration.
+            self.feed_registry = self.FEED_REGISTRY
+            self.key_entities = self.KEY_ENTITIES
+            self.policy_keywords: List[Tuple[str, str]] = []
+        else:
+            shared = [f for f in self.FEED_REGISTRY if f["id"] in self.SHARED_FEED_IDS]
+            self.feed_registry = shared + self.EUR_FEED_REGISTRY
+            self.key_entities = {
+                cat: list(self.EUR_KEY_ENTITIES.get(cat, []))
+                for cat in self.EUR_KEY_ENTITIES
+            }
+            self.policy_keywords = self.POLICY_DIVERGENCE_KEYWORDS
+
     @staticmethod
     def generate_url_hash(url: str) -> str:
         """Computes SHA-256 hash of URL."""
@@ -260,16 +335,22 @@ class NewsRSSCollector(BaseCollector):
                         highest_tier_name = tier_data["name"]
                         highest_severity = tier_data["severity"]
 
-        for category, pattern_list in self.KEY_ENTITIES.items():
+        for category, pattern_list in self.key_entities.items():
             for pattern, label in pattern_list:
                 if re.search(pattern, text, re.IGNORECASE):
                     if label not in matched_entities:
                         matched_entities.append(label)
 
-        all_matched = matched_entities + matched_tier_keywords
+        matched_policy_keywords: List[str] = []
+        for pattern, label in self.policy_keywords:
+            if re.search(pattern, text, re.IGNORECASE):
+                if label not in matched_policy_keywords:
+                    matched_policy_keywords.append(label)
+
+        all_matched = matched_entities + matched_tier_keywords + matched_policy_keywords
         matched_str = ", ".join(all_matched) if all_matched else ""
 
-        return {
+        result = {
             "highest_tier_level": highest_level,
             "highest_tier_name": highest_tier_name,
             "severity": highest_severity,
@@ -278,6 +359,9 @@ class NewsRSSCollector(BaseCollector):
             "all_matched": all_matched,
             "matched_keywords": matched_str,
         }
+        if self.policy_keywords:
+            result["matched_policy_keywords"] = matched_policy_keywords
+        return result
 
     def fetch_feed(self, feed_cfg: Dict[str, str]) -> List[Dict[str, Any]]:
         """
@@ -393,7 +477,7 @@ class NewsRSSCollector(BaseCollector):
         feed_stats: Dict[str, int] = {}
         tier_counts: Dict[int, int] = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0}
 
-        for feed_cfg in self.FEED_REGISTRY:
+        for feed_cfg in self.feed_registry:
             feed_id = feed_cfg["id"]
             self.logger.info(f"Polling feed: {feed_cfg['name']} ({feed_id})")
             items = self.fetch_feed(feed_cfg)
@@ -427,7 +511,7 @@ class NewsRSSCollector(BaseCollector):
 
         summary = {
             "status": "SUCCESS",
-            "feeds_polled": len(self.FEED_REGISTRY),
+            "feeds_polled": len(self.feed_registry),
             "feed_stats": feed_stats,
             "total_items_processed": len(total_items),
             "db_news_headlines_rows": total_in_db,
