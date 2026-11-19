@@ -33,6 +33,9 @@ class MacroAssessment(BaseModel):
     jp_10y: float | None = None
     spread_10y: float | None = None
     spread_bps: float | None = None
+    spread_5d_change: float | None = None
+    spread_20d_change: float | None = None
+    spread_momentum: str | None = None
     upcoming_high_impact_events: list[dict[str, Any]] = Field(default_factory=list)
     policy_divergence_summary: str
     confidence: float = Field(ge=0.0, le=1.0)
@@ -67,6 +70,9 @@ class RiskAssessment(BaseModel):
     intervention_alert_level: InterventionAlertLevel
     highest_mof_tier: int = Field(ge=0, le=4)
     flagged_headlines: list[dict[str, Any]] = Field(default_factory=list)
+    ema_50: float | None = None
+    sma_200: float | None = None
+    market_trend: str | None = None
     veto_trade: bool = False
     risk_notes: str
 

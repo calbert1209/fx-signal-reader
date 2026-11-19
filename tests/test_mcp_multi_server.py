@@ -341,6 +341,7 @@ class TestGracefulServerIsolation(unittest.TestCase):
                             "get_upcoming_macro_events",
                             "get_recent_mof_alerts",
                             "get_market_ticks_summary",
+                            "get_market_trend_summary",
                         },
                     )
 
@@ -430,6 +431,7 @@ class TestLiveMultiServerStdio(unittest.TestCase):
                         "get_upcoming_macro_events",
                         "get_recent_mof_alerts",
                         "get_market_ticks_summary",
+                        "get_market_trend_summary",
                     },
                 )
                 self.assertEqual(
@@ -444,9 +446,10 @@ class TestLiveMultiServerStdio(unittest.TestCase):
                 )
 
                 namespaced = client.get_namespaced_tools()
-                self.assertEqual(len(namespaced), 9)
+                self.assertEqual(len(namespaced), 10)
                 self.assertIn("usdjpy-sqlite:get_latest_yield_spread", namespaced)
                 self.assertIn("usdjpy-sqlite:get_market_ticks_summary", namespaced)
+                self.assertIn("usdjpy-sqlite:get_market_trend_summary", namespaced)
                 self.assertIn("nasdaq-data-link:list_databases", namespaced)
                 self.assertIn("nasdaq-data-link:search_datasets", namespaced)
 

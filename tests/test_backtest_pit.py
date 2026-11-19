@@ -551,6 +551,7 @@ class TestMCPPointInTimeIsolation(unittest.TestCase):
                     "get_upcoming_macro_events",
                     "get_recent_mof_alerts",
                     "get_market_ticks_summary",
+                    "get_market_trend_summary",
                 },
             )
             for name, tool in tool_map.items():

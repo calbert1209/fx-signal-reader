@@ -26,6 +26,15 @@ from mcp.types import ToolAnnotations
 from fx_signal_reader.collectors.market_ticks import MarketTicksCollector
 from fx_signal_reader.collectors.news_rss import NewsRSSCollector
 from fx_signal_reader.core import DEFAULT_DB_PATH, PROJECT_ROOT
+from fx_signal_reader.core.indicators import (
+    DEFAULT_EMA_PERIOD,
+    DEFAULT_SMA_PERIOD,
+    classify_market_trend,
+    classify_spread_momentum,
+    compute_latest_ema,
+    compute_latest_sma,
+    compute_rate_of_change,
+)
 from fx_signal_reader.core.normalizer import normalize_datetime_utc
 from fx_signal_reader.core.spread_calculator import (
     compute_spread_bps,
@@ -101,23 +110,23 @@ def get_latest_yield_spread(
 ) -> dict[str, Any]:
     """
     Return the latest US-Japan sovereign yield spread snapshot along with the
-    most recent USD/JPY (`JPY=X`) spot tick from `market_ticks`.
+    most recent USD/JPY (`JPY=X`) spot tick from `market_ticks` and spread momentum.
     When `as_of_utc` is set, restricts both queries to rows at or before `as_of_utc`.
     """
     normalized_as_of = _normalize_as_of_utc(as_of_utc)
     conn = get_readonly_connection(db_path)
     try:
         if normalized_as_of is not None:
-            spread_row = conn.execute(
+            spread_rows = conn.execute(
                 """
                 SELECT timestamp_utc, us_2y, us_10y, jp_10y, spread_10y, source
                 FROM yield_spreads
                 WHERE timestamp_utc <= ?
                 ORDER BY timestamp_utc DESC
-                LIMIT 1
+                LIMIT 21
                 """,
                 (normalized_as_of,),
-            ).fetchone()
+            ).fetchall()
 
             spot_row = conn.execute(
                 """
@@ -130,14 +139,14 @@ def get_latest_yield_spread(
                 (normalized_as_of,),
             ).fetchone()
         else:
-            spread_row = conn.execute(
+            spread_rows = conn.execute(
                 """
                 SELECT timestamp_utc, us_2y, us_10y, jp_10y, spread_10y, source
                 FROM yield_spreads
                 ORDER BY timestamp_utc DESC
-                LIMIT 1
+                LIMIT 21
                 """
-            ).fetchone()
+            ).fetchall()
 
             spot_row = conn.execute(
                 """
@@ -151,12 +160,30 @@ def get_latest_yield_spread(
     finally:
         conn.close()
 
+    spread_row = spread_rows[0] if spread_rows else None
     us_2y = spread_row["us_2y"] if spread_row else None
     us_10y = spread_row["us_10y"] if spread_row else None
     jp_10y = spread_row["jp_10y"] if spread_row else None
     spread_10y = spread_row["spread_10y"] if spread_row else None
     if spread_10y is None and us_10y is not None and jp_10y is not None:
         spread_10y = compute_yield_spread(us_10y, jp_10y)
+
+    chronological_spreads: list[float] = []
+    for row in reversed(spread_rows):
+        row_spread = row["spread_10y"]
+        if row_spread is None and row["us_10y"] is not None and row["jp_10y"] is not None:
+            row_spread = compute_yield_spread(row["us_10y"], row["jp_10y"])
+        if row_spread is not None:
+            chronological_spreads.append(float(row_spread))
+
+    if spread_row is None or spread_10y is None:
+        spread_5d_change = None
+        spread_20d_change = None
+        momentum = None
+    else:
+        spread_5d_change = compute_rate_of_change(chronological_spreads, 5)
+        spread_20d_change = compute_rate_of_change(chronological_spreads, 20)
+        momentum = classify_spread_momentum(spread_5d_change, spread_20d_change)
 
     return {
         "timestamp_utc": spread_row["timestamp_utc"] if spread_row else None,
@@ -166,6 +193,9 @@ def get_latest_yield_spread(
         "spread_10y": spread_10y,
         "spread_bps": compute_spread_bps(spread_10y),
         "us_2s10s_slope": compute_us_2s10s_slope(us_10y, us_2y),
+        "spread_5d_change": spread_5d_change,
+        "spread_20d_change": spread_20d_change,
+        "momentum": momentum,
         "source": spread_row["source"] if spread_row else None,
         "usdjpy_spot": spot_row["price"] if spot_row else None,
         "usdjpy_timestamp_utc": spot_row["timestamp_utc"] if spot_row else None,
@@ -415,16 +445,90 @@ def get_market_ticks_summary(
     }
 
 
+def _validate_positive_int(value: Any, name: str) -> int:
+    """Validate that an integer parameter is strictly positive and not a boolean."""
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer, got {value!r}.")
+    return value
+
+
+def get_market_trend_summary(
+    symbol: str = "JPY=X",
+    db_path: str | None = None,
+    as_of_utc: str | None = None,
+    ema_period: int = DEFAULT_EMA_PERIOD,
+    sma_period: int = DEFAULT_SMA_PERIOD,
+) -> dict[str, Any]:
+    """
+    Compute rolling EMA-50 and SMA-200 trend indicators for `symbol` up to `as_of_utc`.
+
+    Returns spot price, EMA-50, SMA-200, bar count analyzed, and trend classification
+    (`BULLISH`, `BEARISH`, `SIDEWAYS`, or `None` when no bars exist).
+    """
+    normalized_as_of = _normalize_as_of_utc(as_of_utc)
+    validated_ema = _validate_positive_int(ema_period, "ema_period")
+    validated_sma = _validate_positive_int(sma_period, "sma_period")
+    clean_symbol = (symbol or "").strip() or "JPY=X"
+    fetch_limit = max(validated_ema * 5, validated_sma, 250)
+
+    conn = get_readonly_connection(db_path)
+    try:
+        if normalized_as_of is not None:
+            rows = conn.execute(
+                """
+                SELECT timestamp_utc, price
+                FROM market_ticks
+                WHERE symbol = ? AND timestamp_utc <= ?
+                ORDER BY timestamp_utc DESC
+                LIMIT ?
+                """,
+                (clean_symbol, normalized_as_of, fetch_limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT timestamp_utc, price
+                FROM market_ticks
+                WHERE symbol = ?
+                ORDER BY timestamp_utc DESC
+                LIMIT ?
+                """,
+                (clean_symbol, fetch_limit),
+            ).fetchall()
+    finally:
+        conn.close()
+
+    chronological_rows = list(reversed(rows))
+    prices = [float(r["price"]) for r in chronological_rows if r["price"] is not None]
+    spot_price = prices[-1] if prices else None
+    latest_ts = chronological_rows[-1]["timestamp_utc"] if chronological_rows else None
+    ema_50 = compute_latest_ema(prices, validated_ema)
+    sma_200 = compute_latest_sma(prices, validated_sma)
+    trend = classify_market_trend(spot_price, ema_50, sma_200) if spot_price is not None else None
+
+    return {
+        "symbol": clean_symbol,
+        "timestamp_utc": latest_ts,
+        "as_of_utc": normalized_as_of if normalized_as_of is not None else latest_ts,
+        "spot_price": spot_price,
+        "ema_50": ema_50,
+        "sma_200": sma_200,
+        "trend": trend,
+        "bars_count": len(prices),
+    }
+
+
 mcp_server = MCPServer(
     "usdjpy-sqlite-signals",
     title="USD/JPY SQLite Signal Reader",
     description="Read-only MCP server querying USD/JPY yield spreads, macro events, MoF/BoJ intervention alerts, and market ticks.",
     instructions=(
         "All tools query the local SQLite database strictly in read-only URI mode. "
-        "Use get_latest_yield_spread for rate differentials and spot USD/JPY, "
+        "Use get_latest_yield_spread for rate differentials and spread momentum, "
         "get_upcoming_macro_events for scheduled USD/JPY releases, "
-        "get_recent_mof_alerts for tiered verbal intervention headlines, and "
-        "get_market_ticks_summary for cross-asset OHLCV snapshots."
+        "get_recent_mof_alerts for tiered verbal intervention headlines, "
+        "get_market_ticks_summary for cross-asset OHLCV snapshots, and "
+        "get_market_trend_summary for rolling EMA-50 and SMA-200 trend status."
     ),
     version="1.0.0",
 )
@@ -435,7 +539,8 @@ mcp_server = MCPServer(
     title="Get Latest US-Japan Yield Spread",
     description=(
         "Return the latest US-Japan sovereign yield spread (US 2Y, US 10Y, JP 10Y, "
-        "10Y spread in % and bps, source) plus the latest JPY=X spot price and timestamp."
+        "10Y spread in % and bps, 5d/20d spread changes, momentum, source) plus the "
+        "latest JPY=X spot price and timestamp."
     ),
     annotations=_READ_ONLY_TOOL_ANNOTATIONS,
 )
@@ -512,6 +617,22 @@ def _tool_get_market_ticks_summary(
     as_of_utc: str | None = None,
 ) -> dict[str, Any]:
     return get_market_ticks_summary(symbols=symbols, as_of_utc=as_of_utc)
+
+
+@mcp_server.tool(
+    name="get_market_trend_summary",
+    title="Get Market Trend Summary",
+    description=(
+        "Compute rolling EMA-50 and SMA-200 trend indicators for a market symbol "
+        "(default JPY=X) up to optional as_of_utc and return BULLISH, BEARISH, or SIDEWAYS status."
+    ),
+    annotations=_READ_ONLY_TOOL_ANNOTATIONS,
+)
+def _tool_get_market_trend_summary(
+    symbol: str = "JPY=X",
+    as_of_utc: str | None = None,
+) -> dict[str, Any]:
+    return get_market_trend_summary(symbol=symbol, as_of_utc=as_of_utc)
 
 
 def main() -> None:

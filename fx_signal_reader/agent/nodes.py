@@ -35,6 +35,7 @@ from fx_signal_reader.core.normalizer import normalize_datetime_utc
 from fx_signal_reader.mcp.server import (
     get_latest_yield_spread,
     get_market_ticks_summary,
+    get_market_trend_summary,
     get_recent_mof_alerts,
     get_upcoming_macro_events,
 )
@@ -224,6 +225,8 @@ def _format_macro_summary(
     spread_bps: float | None,
     events: list[dict[str, Any]],
     near_catalysts: list[dict[str, Any]],
+    spread_momentum: str | None = None,
+    downgraded_from_bullish: bool = False,
 ) -> str:
     """Build a concise human-readable macro policy divergence summary."""
     if spread_10y is None:
@@ -232,10 +235,18 @@ def _format_macro_summary(
         bps_text = f"{spread_bps:.1f} bps" if spread_bps is not None else "n/a bps"
         us_text = f"{us_10y:.3f}%" if us_10y is not None else "n/a"
         jp_text = f"{jp_10y:.3f}%" if jp_10y is not None else "n/a"
-        spread_desc = (
-            f"US-JP 10Y spread at {spread_10y:.3f}% ({bps_text}; "
-            f"US10Y={us_text}, JP10Y={jp_text}) implies {yield_bias.value}."
-        )
+        if downgraded_from_bullish:
+            spread_desc = (
+                f"US-JP 10Y spread at {spread_10y:.3f}% ({bps_text}; "
+                f"US10Y={us_text}, JP10Y={jp_text}) but carry compression "
+                f"({spread_momentum}) downgrades BULLISH_USD to NEUTRAL."
+            )
+        else:
+            momentum_note = f" [momentum={spread_momentum}]" if spread_momentum else ""
+            spread_desc = (
+                f"US-JP 10Y spread at {spread_10y:.3f}% ({bps_text}; "
+                f"US10Y={us_text}, JP10Y={jp_text}){momentum_note} implies {yield_bias.value}."
+            )
 
     if near_catalysts:
         titles = ", ".join(str(ev.get("title", "Unnamed")) for ev in near_catalysts[:3])
@@ -326,7 +337,17 @@ def macro_analyst_node(
     )
     near_catalysts = _find_near_window_catalysts(high_impact_events, reference_ts_utc)
 
-    yield_bias = _evaluate_yield_bias(spread_10y)
+    spread_5d_change = _safe_float(spread_snapshot.get("spread_5d_change"))
+    spread_20d_change = _safe_float(spread_snapshot.get("spread_20d_change"))
+    raw_momentum = spread_snapshot.get("momentum") or spread_snapshot.get("spread_momentum")
+    spread_momentum = str(raw_momentum) if raw_momentum is not None else None
+
+    raw_yield_bias = _evaluate_yield_bias(spread_10y)
+    downgraded_from_bullish = (
+        raw_yield_bias == YieldBias.BULLISH_USD and spread_momentum == "CONTRACTING"
+    )
+    yield_bias = YieldBias.NEUTRAL if downgraded_from_bullish else raw_yield_bias
+
     confidence = _compute_macro_confidence(
         spread_10y=spread_10y,
         yield_bias=yield_bias,
@@ -340,6 +361,8 @@ def macro_analyst_node(
         spread_bps=spread_bps,
         events=high_impact_events,
         near_catalysts=near_catalysts,
+        spread_momentum=spread_momentum,
+        downgraded_from_bullish=downgraded_from_bullish,
     )
 
     assessment = MacroAssessment(
@@ -348,6 +371,9 @@ def macro_analyst_node(
         jp_10y=jp_10y,
         spread_10y=spread_10y,
         spread_bps=spread_bps,
+        spread_5d_change=spread_5d_change,
+        spread_20d_change=spread_20d_change,
+        spread_momentum=spread_momentum,
         upcoming_high_impact_events=high_impact_events,
         policy_divergence_summary=summary,
         confidence=confidence,
@@ -564,6 +590,11 @@ def risk_committee_node(
         as_of_utc=as_of_utc,
         lookback_hours=effective_lookback_hours,
     )
+    trend_summary = get_market_trend_summary(symbol="JPY=X", db_path=db_path, as_of_utc=as_of_utc)
+    ema_50 = _safe_float(trend_summary.get("ema_50"))
+    sma_200 = _safe_float(trend_summary.get("sma_200"))
+    raw_trend = trend_summary.get("trend")
+    market_trend = str(raw_trend) if raw_trend is not None else None
 
     symbols_map = ticks_summary.get("symbols") or {}
     spot_from_ticks = _extract_symbol_close(symbols_map, "JPY=X")
@@ -593,10 +624,17 @@ def risk_committee_node(
         risk_regime == RiskRegime.RISK_OFF
         or (vix_level is not None and vix_level >= VIX_RISK_OFF_THRESHOLD)
     )
+    is_falling_knife = bool(
+        yield_bias == YieldBias.BULLISH_USD
+        and spot_price is not None
+        and ema_50 is not None
+        and spot_price < ema_50
+    )
     veto_trade = bool(
         intervention_score >= INTERVENTION_VETO_SCORE
         or highest_tier >= 4
         or is_risk_off
+        or is_falling_knife
     )
 
     flagged_headlines = [
@@ -621,6 +659,8 @@ def risk_committee_node(
         veto_reasons.append(f"MoF verbal tier {highest_tier} >= 4")
     if is_risk_off:
         veto_reasons.append(f"RISK_OFF regime (VIX {vix_text} >= {VIX_RISK_OFF_THRESHOLD})")
+    if is_falling_knife and spot_price is not None and ema_50 is not None:
+        veto_reasons.append(f"trend filter veto (spot {spot_price:.3f} < EMA-50 {ema_50:.3f})")
     veto_suffix = f" [{'; '.join(veto_reasons)}]" if veto_reasons else ""
 
     risk_notes = (
@@ -641,6 +681,9 @@ def risk_committee_node(
         intervention_alert_level=alert_level,
         highest_mof_tier=highest_tier,
         flagged_headlines=flagged_headlines,
+        ema_50=ema_50,
+        sma_200=sma_200,
+        market_trend=market_trend,
         veto_trade=veto_trade,
         risk_notes=risk_notes,
     )

@@ -372,6 +372,7 @@ class TestMCPServerRegistrationAndStdio(unittest.TestCase):
                 "get_upcoming_macro_events",
                 "get_recent_mof_alerts",
                 "get_market_ticks_summary",
+                "get_market_trend_summary",
             }
             self.assertEqual(set(tool_map.keys()), expected_names)
 
@@ -406,6 +407,7 @@ class TestMCPServerRegistrationAndStdio(unittest.TestCase):
                             "get_upcoming_macro_events",
                             "get_recent_mof_alerts",
                             "get_market_ticks_summary",
+                            "get_market_trend_summary",
                         },
                     )
 
