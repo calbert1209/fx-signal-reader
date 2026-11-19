@@ -71,6 +71,7 @@ class BacktestConfig(BaseModel):
 
     model_config = ConfigDict(allow_inf_nan=False)
 
+    pair: str = Field(default="USD/JPY")
     start_utc: str | None = None
     end_utc: str | None = None
     step_hours: int = Field(default=4, ge=0)
@@ -87,6 +88,25 @@ class BacktestConfig(BaseModel):
     allowed_regimes: list[RiskRegime] = Field(
         default_factory=lambda: [RiskRegime.RISK_ON, RiskRegime.TRANSITIONAL]
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _adjust_pair_defaults(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            pair_raw = data.get("pair")
+            if pair_raw:
+                from fx_signal_reader.core.pair_profile import get_pair_profile
+                try:
+                    p = get_pair_profile(pair_raw)
+                    data["pair"] = p.pair
+                    if p.symbol_slug == "eurusd":
+                        if "sl_pips" not in data or data["sl_pips"] is None:
+                            data["sl_pips"] = 50.0
+                        if "tp_pips" not in data or data["tp_pips"] is None:
+                            data["tp_pips"] = 100.0
+                except ValueError:
+                    pass
+        return data
 
     @field_validator("start_utc", "end_utc", mode="before")
     @classmethod
@@ -150,6 +170,7 @@ class SimulatedTrade(BaseModel):
 
     trade_id: str = Field(min_length=1)
     proposal_id: str = Field(min_length=1)
+    pair: str = Field(default="USD/JPY")
     entry_time_utc: str
     exit_time_utc: str
     action: TradeAction
@@ -160,7 +181,7 @@ class SimulatedTrade(BaseModel):
     exit_price: float = Field(gt=0.0)
     exit_reason: ExitReason
     pnl_pips: float
-    pnl_jpy: float
+    pnl_jpy: float = Field(default=0.0)
     pnl_usd: float
     r_multiple: float
     macro_bias: YieldBias

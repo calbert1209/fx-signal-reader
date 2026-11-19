@@ -32,6 +32,7 @@ from fx_signal_reader.backtest.models import (
     SimulatedTrade,
 )
 from fx_signal_reader.core.normalizer import normalize_datetime_utc
+from fx_signal_reader.core.pair_profile import get_pair_profile
 from fx_signal_reader.mcp.server import get_readonly_connection, resolve_db_path
 
 
@@ -152,9 +153,17 @@ def simulate_trade_resolution(
 
     entry_ts, entry_dt = _parse_utc_strict(proposal_obj.timestamp_utc, "proposal.timestamp_utc")
 
-    spread_jpy = config_obj.spread_pips * 0.01
+    pair_name = (
+        getattr(config_obj, "pair", None)
+        or getattr(proposal_obj, "pair", None)
+        or "USD/JPY"
+    )
+    profile = get_pair_profile(pair_name)
+    pip_size = profile.pip_size
+
+    spread_dist = config_obj.spread_pips * pip_size
     direction = 1 if proposal_obj.action == TradeAction.BUY else -1
-    effective_entry = round(entry_price + direction * spread_jpy, 6)
+    effective_entry = round(entry_price + direction * spread_dist, 6)
     if not math.isfinite(effective_entry) or effective_entry <= 0.0:
         raise ValueError("Spread-adjusted entry price must be positive and finite.")
 
@@ -286,15 +295,20 @@ def simulate_trade_resolution(
     assert exit_ts is not None and exit_price is not None
 
     price_delta = direction * (exit_price - effective_entry)
-    pnl_pips = round(price_delta * 100.0, 2)
-    pnl_jpy = round(price_delta * units, 2)
-    pnl_usd = round(pnl_jpy / exit_price, 4)
+    pnl_pips = round(price_delta / pip_size, 2)
+    if profile.is_quote_usd:
+        pnl_usd = round(price_delta * units, 4)
+        pnl_jpy = 0.0
+    else:
+        pnl_jpy = round(price_delta * units, 2)
+        pnl_usd = round(pnl_jpy / exit_price, 4)
 
     r_multiple = round(price_delta / risk_per_unit, 4)
 
     return SimulatedTrade(
         trade_id=f"sim-{proposal_obj.proposal_id}",
         proposal_id=proposal_obj.proposal_id,
+        pair=profile.pair,
         entry_time_utc=entry_ts,
         exit_time_utc=exit_ts,
         action=proposal_obj.action,
@@ -578,14 +592,15 @@ def compute_backtest_metrics(
     return metrics, equity_curve
 
 
-def _load_jpy_ohlc_bars(
+def _load_pair_ohlc_bars(
     db_path: Path,
-    start_utc: str | None,
-    end_utc: str | None,
+    symbol: str = "JPY=X",
+    start_utc: str | None = None,
+    end_utc: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Load chronological JPY=X OHLC bars from SQLite within optional UTC bounds."""
-    clauses = ["symbol = 'JPY=X'"]
-    params: list[Any] = []
+    """Load chronological OHLC bars for symbol from SQLite within optional UTC bounds."""
+    clauses = ["symbol = ?"]
+    params: list[Any] = [symbol]
     if start_utc is not None:
         clauses.append("timestamp_utc >= ?")
         params.append(start_utc)
@@ -620,6 +635,15 @@ def _load_jpy_ohlc_bars(
             }
         )
     return bars
+
+
+def _load_jpy_ohlc_bars(
+    db_path: Path,
+    start_utc: str | None,
+    end_utc: str | None,
+) -> list[dict[str, Any]]:
+    """Load chronological JPY=X OHLC bars from SQLite within optional UTC bounds (wrapper)."""
+    return _load_pair_ohlc_bars(db_path, symbol="JPY=X", start_utc=start_utc, end_utc=end_utc)
 
 
 def _sample_evaluation_indices(
@@ -664,14 +688,17 @@ def run_backtest(
         raise TypeError(f"Expected BacktestConfig or Mapping, got {type(config).__name__}.")
 
     resolved_db = resolve_db_path(db_path)
-    bars = _load_jpy_ohlc_bars(
+    profile = get_pair_profile(config_obj.pair)
+    bars = _load_pair_ohlc_bars(
         resolved_db,
+        symbol=profile.spot_symbol,
         start_utc=config_obj.start_utc,
         end_utc=config_obj.end_utc,
     )
 
     if not bars:
         empty_coverage = {
+            "bars": 0,
             "jpy_bars": 0,
             "steps_evaluated": 0,
             "yield_spread_pct": 0.0,
@@ -728,6 +755,7 @@ def run_backtest(
         initial_state = create_initial_state(
             run_id=run_id,
             timestamp_utc=step_ts,
+            pair=effective_config.pair,
             account_capital_usd=effective_config.initial_capital_usd,
             sl_pips=effective_config.sl_pips,
             tp_pips=effective_config.tp_pips,
@@ -783,6 +811,7 @@ def run_backtest(
     total_steps = len(eval_indices)
     denom = float(total_steps) if total_steps > 0 else 1.0
     data_coverage = {
+        "bars": len(bars),
         "jpy_bars": len(bars),
         "steps_evaluated": total_steps,
         "yield_spread_pct": round((spread_hits / denom) * 100.0, 2) if total_steps else 0.0,

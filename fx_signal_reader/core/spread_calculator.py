@@ -359,6 +359,7 @@ def align_yield_series(
     fill_method: str = "ffill",
     max_stale_days: int = 5,
     source_label: str = "FRED+MoF",
+    is_base_usd: bool = True,
 ) -> List[YieldSpreadRecord]:
     """
     Aligns historical daily yields across US and Japanese bond markets, handling
@@ -465,7 +466,10 @@ def align_yield_series(
             us_2y_val = None
 
         # Calculations
-        spread = compute_yield_spread(us_10y_val, jp_10y_val)
+        if is_base_usd:
+            spread = compute_pair_spread(us_10y_val, jp_10y_val)
+        else:
+            spread = compute_pair_spread(jp_10y_val, us_10y_val)
         bps = compute_spread_bps(spread)
         slope = compute_us_2s10s_slope(us_10y_val, us_2y_val)
         ts_utc = f"{d_str}T00:00:00Z"

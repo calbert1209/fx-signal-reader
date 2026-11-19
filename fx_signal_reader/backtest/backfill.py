@@ -592,11 +592,52 @@ def backfill_jgb_yields(
     }
 
 
+def backfill_de_bund_yields(
+    db_path: str | Path = DEFAULT_BACKTEST_DB_PATH,
+    start_date: str | date | datetime | None = None,
+    end_date: str | date | datetime | None = None,
+    fred_api_key: str | None = None,
+) -> dict[str, Any]:
+    """Fetch German 10Y Bund yield series and store ``DE10Y`` in ``market_ticks``."""
+    _, _, _, _, start_date_str, end_date_str = _resolve_date_range(
+        start_date, end_date, interval="1h"
+    )
+    collector = MarketTicksCollector(db_path=db_path, pair="EUR/USD", fred_api_key=fred_api_key)
+    rows_inserted = 0
+    try:
+        de_info = collector.fetch_de_10y_bund()
+        rate = de_info["rate_10y"]
+        ts = de_info["timestamp_utc"]
+        conn = _open_db_connection(db_path)
+        try:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO market_ticks
+                (symbol, timestamp_utc, price, open, high, low, volume)
+                VALUES (?, ?, ?, ?, ?, ?, 0.0)
+                """,
+                ("DE10Y", ts, rate, rate, rate, rate),
+            )
+            conn.commit()
+            rows_inserted = 1
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning(f"Failed to fetch DE10Y yield during backfill: {exc}")
+
+    return {
+        "status": "SUCCESS" if rows_inserted > 0 else "PARTIAL",
+        "rows_inserted": rows_inserted,
+        "symbol": "DE10Y",
+    }
+
+
 def backfill_yield_spreads(
     db_path: str | Path = DEFAULT_BACKTEST_DB_PATH,
     start_date: str | date | datetime | None = None,
     end_date: str | date | datetime | None = None,
     fred_api_key: str | None = None,
+    pair: str = "USD/JPY",
 ) -> dict[str, Any]:
     """Compute and store daily aligned US-Japan 10Y yield spreads into ``yield_spreads``."""
     _, _, _, _, start_date_str, end_date_str = _resolve_date_range(
@@ -714,39 +755,45 @@ def backfill_yield_spreads(
                     logger.warning(msg)
                     warnings.append(msg)
 
-        jgb_rows = conn.execute(
+        from fx_signal_reader.core.pair_profile import get_pair_profile
+
+        profile = get_pair_profile(pair)
+        foreign_symbol = profile.quote_yield_symbol if profile.is_base_usd else profile.base_yield_symbol
+
+        foreign_rows = conn.execute(
             """
             SELECT timestamp_utc, price
             FROM market_ticks
-            WHERE symbol = 'JGB10Y'
+            WHERE symbol = ?
               AND timestamp_utc >= ?
               AND timestamp_utc <= ?
             ORDER BY timestamp_utc ASC
             """,
-            (f"{lookback_start_str}T00:00:00Z", f"{end_date_str}T23:59:59Z"),
+            (foreign_symbol, f"{lookback_start_str}T00:00:00Z", f"{end_date_str}T23:59:59Z"),
         ).fetchall()
 
-        jp_10y_series: dict[str, float] = {}
-        for row in jgb_rows:
+        foreign_10y_series: dict[str, float] = {}
+        for row in foreign_rows:
             val = _coerce_finite_float(row["price"])
             if val is not None:
-                jp_10y_series[row["timestamp_utc"][:10]] = val
+                foreign_10y_series[row["timestamp_utc"][:10]] = val
 
-        if not us_10y_series or not jp_10y_series:
+        if not us_10y_series or not foreign_10y_series:
             msg = (
                 "Insufficient yield inputs to align spreads "
-                f"(us_10y={len(us_10y_series)}, jp_10y={len(jp_10y_series)})."
+                f"(us_10y={len(us_10y_series)}, foreign_10y={len(foreign_10y_series)})."
             )
             logger.warning(msg)
             warnings.append(msg)
         else:
             aligned = align_yield_series(
                 us_10y_series=us_10y_series,
-                jp_10y_series=jp_10y_series,
+                jp_10y_series=foreign_10y_series,
                 us_2y_series=us_2y_series if us_2y_series else None,
                 fill_method="ffill",
                 max_stale_days=5,
                 source_label=source_label,
+                is_base_usd=profile.is_base_usd,
             )
             records_to_save = [
                 rec
@@ -778,14 +825,27 @@ def backfill_yield_spreads(
 
 
 def backfill_historical_data(
-    db_path: str | Path = DEFAULT_BACKTEST_DB_PATH,
+    db_path: str | Path | None = None,
     start_date: str | date | datetime | None = None,
     end_date: str | date | datetime | None = None,
     interval: str = "1h",
     symbols: Sequence[str] | None = None,
     fred_api_key: str | None = None,
+    pair: str = "USD/JPY",
 ) -> dict[str, Any]:
     """Orchestrate full historical backfill into an isolated SQLite database."""
+    from fx_signal_reader.core.pair_profile import RiskPolicyType, get_pair_profile
+
+    profile = get_pair_profile(pair)
+    if db_path is None:
+        effective_db_path = (
+            DEFAULT_BACKTEST_DB_PATH
+            if profile.pair == "USD/JPY"
+            else PROJECT_ROOT / "data" / f"backtest_signals_{profile.symbol_slug}.db"
+        )
+    else:
+        effective_db_path = Path(db_path)
+
     _validate_interval(interval)
     _, _, _, _, start_date_str, end_date_str = _resolve_date_range(
         start_date, end_date, interval=interval
@@ -794,26 +854,47 @@ def backfill_historical_data(
     resolved_start = start_date if start_date is not None else start_date_str
     resolved_end = end_date if end_date is not None else end_date_str
 
-    init_conn = _open_db_connection(db_path)
+    init_conn = _open_db_connection(effective_db_path)
     init_conn.close()
 
+    effective_symbols = (
+        symbols
+        if symbols is not None
+        else (
+            MarketTicksCollector.EURUSD_TICKERS
+            if profile.pair == "EUR/USD"
+            else MarketTicksCollector.TICKERS
+        )
+    )
+
     ticks_summary = backfill_market_ticks(
-        db_path=db_path,
+        db_path=effective_db_path,
         start_date=resolved_start,
         end_date=resolved_end,
         interval=interval,
-        symbols=symbols,
+        symbols=effective_symbols,
     )
-    jgb_summary = backfill_jgb_yields(
-        db_path=db_path,
-        start_date=resolved_start,
-        end_date=resolved_end,
-    )
+
+    if profile.risk_policy == RiskPolicyType.VERBAL_LADDER:
+        yield_summary = backfill_jgb_yields(
+            db_path=effective_db_path,
+            start_date=resolved_start,
+            end_date=resolved_end,
+        )
+    else:
+        yield_summary = backfill_de_bund_yields(
+            db_path=effective_db_path,
+            start_date=resolved_start,
+            end_date=resolved_end,
+            fred_api_key=fred_api_key,
+        )
+
     spreads_summary = backfill_yield_spreads(
-        db_path=db_path,
+        db_path=effective_db_path,
         start_date=resolved_start,
         end_date=resolved_end,
         fred_api_key=fred_api_key,
+        pair=profile.pair,
     )
 
     from fx_signal_reader.backtest.backfill_calendar import backfill_calendar
@@ -822,29 +903,40 @@ def backfill_historical_data(
     )
 
     calendar_summary = backfill_calendar(
-        db_path=db_path,
+        db_path=effective_db_path,
         start_date=resolved_start,
         end_date=resolved_end,
-    )
-    intervention_summary = backfill_intervention_headlines(
-        db_path=db_path,
-        start_date=resolved_start,
-        end_date=resolved_end,
+        pair=profile.pair,
     )
 
-    counts_conn = _open_db_connection(db_path)
+    if profile.risk_policy == RiskPolicyType.VERBAL_LADDER:
+        intervention_summary = backfill_intervention_headlines(
+            db_path=effective_db_path,
+            start_date=resolved_start,
+            end_date=resolved_end,
+        )
+    else:
+        intervention_summary = {
+            "status": "SKIPPED",
+            "reason": f"Verbal intervention headlines not applicable for {profile.pair}",
+            "rows_inserted": 0,
+        }
+
+    counts_conn = _open_db_connection(effective_db_path)
     try:
         db_counts = get_table_counts(counts_conn)
     finally:
         counts_conn.close()
 
     return {
-        "db_path": str(Path(db_path)),
+        "db_path": str(effective_db_path),
         "start_date": start_date_str,
         "end_date": end_date_str,
         "interval": interval,
+        "pair": profile.pair,
         "market_ticks": ticks_summary,
-        "jgb_yields": jgb_summary,
+        "foreign_yields": yield_summary,
+        "jgb_yields": yield_summary,
         "yield_spreads": spreads_summary,
         "macro_events": calendar_summary,
         "news_headlines": intervention_summary,

@@ -233,11 +233,23 @@ def backfill_calendar(
     end_date: str | date | datetime | None = None,
     archive_paths: Sequence[str | Path] | None = None,
     include_builtin_schedule: bool = True,
+    pair: str = "USD/JPY",
+    currencies: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Backfill historical USD/JPY economic calendar events into SQLite `macro_events`."""
+    """Backfill historical economic calendar events into SQLite `macro_events`."""
     start_dt, end_dt, start_utc, end_utc, start_date_str, end_date_str = _resolve_date_range(
         start_date, end_date, interval="1d"
     )
+
+    if currencies:
+        target_currencies = frozenset(c.upper() for c in currencies)
+    else:
+        from fx_signal_reader.core.pair_profile import get_pair_profile
+        try:
+            p = get_pair_profile(pair)
+            target_currencies = frozenset(c.upper() for c in p.calendar_currencies) or _TARGET_CURRENCIES
+        except ValueError:
+            target_currencies = _TARGET_CURRENCIES
 
     candidates: list[dict[str, Any]] = []
     if include_builtin_schedule:
@@ -250,7 +262,7 @@ def backfill_calendar(
         currency = str(item.get("currency") or "").upper()
         impact = str(item.get("impact") or "").title()
         ts_utc = str(item.get("timestamp_utc") or "")
-        if currency not in _TARGET_CURRENCIES or impact not in _TARGET_IMPACTS:
+        if currency not in target_currencies or impact not in _TARGET_IMPACTS:
             continue
         if not (start_utc <= ts_utc <= end_utc):
             continue
