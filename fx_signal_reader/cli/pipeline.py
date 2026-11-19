@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Any
@@ -27,6 +28,7 @@ from fx_signal_reader.agent.graph import (
     resume_with_decision,
 )
 from fx_signal_reader.agent.state import create_initial_state
+from fx_signal_reader.core.pair_profile import get_pair_db_path, get_pair_profile
 
 
 def run_signal_pipeline(
@@ -42,12 +44,17 @@ def run_signal_pipeline(
     sl_pips: float | None = None,
     tp_pips: float | None = None,
     use_atr: bool = False,
+    pair: str = "USD/JPY",
 ) -> dict[str, Any]:
     """
-    Execute the USD/JPY LangGraph pipeline end-to-end and return a structured result payload.
+    Execute the FX Signal Reader LangGraph pipeline end-to-end and return a structured result payload.
     """
     if auto_approve and reject:
         raise ValueError("Cannot specify both auto_approve=True and reject=True.")
+
+    profile = get_pair_profile(pair)
+    if db_path is None and profile.pair != "USD/JPY":
+        db_path = str(get_pair_db_path(profile))
 
     parsed_regimes: list[str] | None
     if allowed_regimes is None:
@@ -72,6 +79,7 @@ def run_signal_pipeline(
     config = {"configurable": {"thread_id": resolved_thread}}
     initial_state = create_initial_state(
         run_id=resolved_thread,
+        pair=profile.pair,
         sl_pips=sl_pips,
         tp_pips=tp_pips,
         use_atr=True if use_atr else None,
@@ -140,14 +148,15 @@ def format_pipeline_summary(result: dict[str, Any]) -> str:
     risk = state.get("risk_assessment") or {}
     proposal = state.get("trade_proposal") or {}
     receipt = state.get("execution_receipt") or {}
+    pair_label = state.get("pair") or "USD/JPY"
 
     lines = [
         "=" * 74,
-        "USD/JPY Signal Reader - LangGraph Multi-Agent Pipeline Report",
+        f"{pair_label} Signal Reader - LangGraph Multi-Agent Pipeline Report",
         "=" * 74,
         f"Thread / Run ID    : {result.get('thread_id')}",
         f"Timestamp (UTC)    : {state.get('timestamp_utc')}",
-        f"USD/JPY Spot       : {state.get('spot_price')}",
+        f"{pair_label} Spot       : {state.get('spot_price')}",
         f"Awaiting Approval  : {result.get('paused_for_approval')} (next={result.get('next_nodes')})",
         "-" * 74,
         "[1] Macro Analyst Assessment",
@@ -190,7 +199,13 @@ def format_pipeline_summary(result: dict[str, Any]) -> str:
 def build_arg_parser() -> argparse.ArgumentParser:
     """Create CLI argument parser for `run_pipeline.py`."""
     parser = argparse.ArgumentParser(
-        description="Run the USD/JPY LangGraph multi-agent signal and paper-execution pipeline."
+        description="Run the FX Signal Reader LangGraph multi-agent signal and paper-execution pipeline."
+    )
+    parser.add_argument(
+        "--pair",
+        type=str,
+        default=os.getenv("FX_PAIR", "USD/JPY"),
+        help="Currency pair to evaluate (default: USD/JPY or FX_PAIR env var).",
     )
     parser.add_argument(
         "--db-path",
@@ -271,6 +286,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     result = run_signal_pipeline(
+        pair=args.pair,
         db_path=args.db_path,
         ledger_path=args.ledger_path,
         thread_id=args.thread_id,

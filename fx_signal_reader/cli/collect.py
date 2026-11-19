@@ -25,6 +25,7 @@ from fx_signal_reader.collectors.calendar import CalendarCollector
 from fx_signal_reader.collectors.market_ticks import MarketTicksCollector
 from fx_signal_reader.collectors.news_rss import NewsRSSCollector
 from fx_signal_reader.core import DEFAULT_DB_PATH, DEFAULT_SCHEMA_PATH
+from fx_signal_reader.core.pair_profile import get_pair_db_path, get_pair_profile
 
 
 def init_db(db_path: Path, schema_path: Path) -> sqlite3.Connection:
@@ -57,7 +58,13 @@ def get_table_counts(conn: sqlite3.Connection) -> Dict[str, int]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="USD/JPY Signal Reader Production Collector"
+        description="FX Signal Reader Production Collector"
+    )
+    parser.add_argument(
+        "--pair",
+        type=str,
+        default=os.getenv("FX_PAIR", "USD/JPY"),
+        help="Currency pair to collect (default: USD/JPY or FX_PAIR env var)",
     )
     parser.add_argument(
         "--collector",
@@ -68,8 +75,8 @@ def main() -> int:
     parser.add_argument(
         "--db-path",
         type=str,
-        default=os.getenv("FX_DB_PATH", str(DEFAULT_DB_PATH)),
-        help=f"Path to SQLite database file (default: {DEFAULT_DB_PATH})",
+        default=None,
+        help="Path to SQLite database file (defaults to pair-specific database)",
     )
     parser.add_argument(
         "--schema-path",
@@ -92,14 +99,23 @@ def main() -> int:
 
     args = parser.parse_args()
 
+    profile = get_pair_profile(args.pair)
     start_time = time.time()
     start_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    db_path = Path(args.db_path)
+
+    if args.db_path:
+        db_path = Path(args.db_path)
+    elif os.getenv("FX_DB_PATH"):
+        db_path = Path(os.getenv("FX_DB_PATH"))
+    else:
+        db_path = get_pair_db_path(profile)
+
     schema_path = Path(args.schema_path)
 
     print("=" * 70)
-    print("USD/JPY Signal Pipeline - Modular Collector Runner")
+    print(f"{profile.pair} Signal Pipeline - Modular Collector Runner")
     print(f"Start Time (UTC): {start_utc}")
+    print(f"Currency Pair   : {profile.pair}")
     print(f"Target Database : {db_path.resolve()}")
     print(f"Collector Target: {args.collector.upper()}")
     print("=" * 70)
@@ -118,6 +134,7 @@ def main() -> int:
                 db_path=db_path,
                 schema_path=schema_path,
                 max_retries=args.retries,
+                pair=profile,
             )
             results["ticks"] = tick_collector.collect()
 
@@ -128,6 +145,7 @@ def main() -> int:
                 db_path=db_path,
                 schema_path=schema_path,
                 max_retries=args.retries,
+                pair=profile,
             )
             results["calendar"] = cal_collector.collect()
 
@@ -138,6 +156,7 @@ def main() -> int:
                 db_path=db_path,
                 schema_path=schema_path,
                 max_retries=args.retries,
+                pair=profile,
             )
             results["news"] = news_collector.collect()
 
@@ -169,22 +188,24 @@ def main() -> int:
     # Key highlights
     if "ticks" in results:
         t_res = results["ticks"]
+        spot_val = t_res.get("latest_prices", {}).get(profile.spot_symbol)
         print(
-            f"• Market Ticks: USD/JPY = {t_res.get('latest_prices', {}).get('JPY=X')}, "
-            f"US 10Y = {t_res.get('us_10y')}%, JGB 10Y = {t_res.get('jgb_10y')}%, "
+            f"• Market Ticks: {profile.pair} = {spot_val}, "
+            f"Base 10Y = {t_res.get('base_10y') or t_res.get('us_10y')}%, "
+            f"Quote 10Y = {t_res.get('quote_10y') or t_res.get('foreign_10y') or t_res.get('jgb_10y')}%, "
             f"10Y Spread = {t_res.get('spread_10y')}%"
         )
     if "calendar" in results:
         c_res = results["calendar"]
+        inserted_events = c_res.get("usd_jpy_events_inserted") or c_res.get(f"{profile.symbol_slug[:3]}_{profile.symbol_slug[3:]}_events_inserted", 0)
         print(
-            f"• Calendar    : {c_res.get('usd_jpy_events_inserted')} USD/JPY events "
-            f"({c_res.get('usd_events')} USD, {c_res.get('jpy_events')} JPY) via {c_res.get('source_used')}"
+            f"• Calendar    : {inserted_events} {profile.pair} events via {c_res.get('source_used')}"
         )
     if "news" in results:
         n_res = results["news"]
         print(
             f"• News RSS    : {n_res.get('total_items_processed')} items parsed across {n_res.get('feeds_polled')} feeds, "
-            f"{n_res.get('flagged_intervention_rows')} intervention signals flagged"
+            f"{n_res.get('flagged_intervention_rows')} policy/intervention signals flagged"
         )
     print("=" * 70)
     return 0

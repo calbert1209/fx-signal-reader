@@ -40,6 +40,7 @@ from fx_signal_reader.collectors.calendar import CalendarCollector
 from fx_signal_reader.collectors.market_ticks import MarketTicksCollector
 from fx_signal_reader.collectors.news_rss import NewsRSSCollector
 from fx_signal_reader.core import DEFAULT_DB_PATH, DEFAULT_SCHEMA_PATH
+from fx_signal_reader.core.pair_profile import PairProfile, get_pair_db_path, get_pair_profile
 
 # Configure structured logging
 logging.basicConfig(
@@ -218,6 +219,7 @@ class JobSchedule:
 class SchedulerConfig:
     """Scheduler configuration parameters."""
 
+    pair: str = "USD/JPY"
     db_path: Path = field(default_factory=lambda: DEFAULT_DB_PATH)
     schema_path: Path = field(default_factory=lambda: DEFAULT_SCHEMA_PATH)
     news_interval: int = 300  # 5 minutes
@@ -235,8 +237,19 @@ class SchedulerConfig:
     @classmethod
     def from_env_and_args(cls, args: Optional[argparse.Namespace] = None) -> SchedulerConfig:
         """Constructs configuration merging defaults, environment variables, and CLI flags."""
-        # Read from environment
-        env_db_path = os.getenv("FX_DB_PATH", str(DEFAULT_DB_PATH))
+        pair_val = getattr(args, "pair", None) or os.getenv("FX_PAIR", "USD/JPY")
+        profile = get_pair_profile(pair_val)
+
+        # Read from environment or arguments
+        if getattr(args, "db_path", None):
+            resolved_db = Path(args.db_path)
+        elif os.getenv("FX_DB_PATH"):
+            resolved_db = Path(os.getenv("FX_DB_PATH"))
+        elif profile.pair != "USD/JPY":
+            resolved_db = get_pair_db_path(profile)
+        else:
+            resolved_db = DEFAULT_DB_PATH
+
         env_news = parse_interval(os.getenv("INTERVAL_NEWS"), 300)
         env_ticks = parse_interval(os.getenv("INTERVAL_TICKS"), 900)
         env_calendar = parse_interval(os.getenv("INTERVAL_CALENDAR"), 86400)
@@ -252,7 +265,8 @@ class SchedulerConfig:
                 hour, minute = 0, 5
 
         cfg = cls(
-            db_path=Path(env_db_path),
+            pair=profile.pair,
+            db_path=resolved_db,
             news_interval=env_news,
             ticks_interval=env_ticks,
             calendar_interval=env_calendar,
@@ -440,6 +454,7 @@ class SignalScheduler:
             self.update_next_run(job_name, start_utc)
             return res
 
+        profile = get_pair_profile(self.config.pair)
         result: Dict[str, Any] = {}
         try:
             if job_name == "news":
@@ -447,6 +462,7 @@ class SignalScheduler:
                     db_path=self.config.db_path,
                     schema_path=self.config.schema_path,
                     max_retries=self.config.retries,
+                    pair=profile,
                 )
                 result = collector.collect()
             elif job_name == "ticks":
@@ -454,6 +470,7 @@ class SignalScheduler:
                     db_path=self.config.db_path,
                     schema_path=self.config.schema_path,
                     max_retries=self.config.retries,
+                    pair=profile,
                 )
                 result = collector.collect()
             elif job_name == "calendar":
@@ -461,6 +478,7 @@ class SignalScheduler:
                     db_path=self.config.db_path,
                     schema_path=self.config.schema_path,
                     max_retries=self.config.retries,
+                    pair=profile,
                 )
                 result = collector.collect()
             else:
@@ -491,6 +509,7 @@ class SignalScheduler:
         now = normalize_to_utc(current_dt)
         session = self.get_session_regime(now)
         eff_ticks = self.get_effective_ticks_interval(now)
+        profile = get_pair_profile(self.config.pair)
 
         tokyo_indicator = "ACTIVE (09:45-10:05 JST)" if session["is_tokyo_fix_window"] else "Inactive"
         if session["is_exact_tokyo_fix"]:
@@ -498,13 +517,14 @@ class SignalScheduler:
         london_indicator = "ACTIVE (13:00-17:00 UTC)" if session["is_london_ny_overlap"] else "Inactive"
 
         print("\n" + "=" * 80)
-        print("USD/JPY Signal Pipeline - Production Tiered Scheduler Telemetry")
+        print(f"{profile.pair} Signal Pipeline - Production Tiered Scheduler Telemetry")
         print("=" * 80)
         print(f"Current Time (UTC): {session['timestamp_utc']} | JST: {session['timestamp_jst']}")
         print(f"Active Regime     : {session['regime_name']}")
         print(f"Liquidity Level   : {session['liquidity_level']} | Active Sessions: {', '.join(session['active_sessions']) or 'None'}")
         print(f"Tokyo Fix Window  : {tokyo_indicator}")
         print(f"London/NY Overlap : {london_indicator}")
+        print(f"Currency Pair     : {profile.pair}")
         print(f"Target Database   : {self.config.db_path.resolve()}")
         if session["is_tokyo_fix_window"] and self.config.enable_tokyo_fix_expedited:
             print(f"NOTE              : Tokyo Fix active! Market ticks expedited to {eff_ticks}s cadence.")
@@ -560,23 +580,29 @@ class SignalScheduler:
         print("=" * 80)
 
         # Highlight key metrics
+        profile = get_pair_profile(self.config.pair)
         if "ticks" in results and isinstance(results["ticks"], dict) and "latest_prices" in results["ticks"]:
             t_res = results["ticks"]
+            spot_val = t_res.get("latest_prices", {}).get(profile.spot_symbol)
             print(
-                f"• Market Ticks: USD/JPY = {t_res.get('latest_prices', {}).get('JPY=X')}, "
-                f"US 10Y = {t_res.get('us_10y')}%, JGB 10Y = {t_res.get('jgb_10y')}%, "
+                f"• Market Ticks: {profile.pair} = {spot_val}, "
+                f"Base 10Y = {t_res.get('base_10y') or t_res.get('us_10y')}%, "
+                f"Quote 10Y = {t_res.get('quote_10y') or t_res.get('foreign_10y') or t_res.get('jgb_10y')}%, "
                 f"10Y Spread = {t_res.get('spread_10y')}%"
             )
-        if "calendar" in results and isinstance(results["calendar"], dict) and "usd_jpy_events_inserted" in results["calendar"]:
+        if "calendar" in results and isinstance(results["calendar"], dict):
             c_res = results["calendar"]
+            inserted_events = c_res.get("usd_jpy_events_inserted") or c_res.get(
+                f"{profile.symbol_slug[:3]}_{profile.symbol_slug[3:]}_events_inserted", 0
+            )
             print(
-                f"• Calendar    : {c_res.get('usd_jpy_events_inserted')} events via {c_res.get('source_used')}"
+                f"• Calendar    : {inserted_events} {profile.pair} events via {c_res.get('source_used')}"
             )
         if "news" in results and isinstance(results["news"], dict) and "flagged_intervention_rows" in results["news"]:
             n_res = results["news"]
             print(
                 f"• News RSS    : {n_res.get('total_items_processed')} items parsed across {n_res.get('feeds_polled')} feeds, "
-                f"{n_res.get('flagged_intervention_rows')} intervention signals flagged"
+                f"{n_res.get('flagged_intervention_rows')} policy/intervention signals flagged"
             )
         print("=" * 80)
         return results
@@ -628,8 +654,14 @@ class SignalScheduler:
 def build_arg_parser() -> argparse.ArgumentParser:
     """Builds command-line argument parser for scheduler CLI."""
     parser = argparse.ArgumentParser(
-        description="USD/JPY Signal Reader Production Tiered Scheduler",
+        description="FX Signal Reader Production Tiered Scheduler",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--pair",
+        type=str,
+        default=os.getenv("FX_PAIR", "USD/JPY"),
+        help="Currency pair to collect and schedule (default: USD/JPY or FX_PAIR env var)",
     )
     parser.add_argument(
         "--run-once",
@@ -644,8 +676,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--db-path",
         type=str,
-        default=os.getenv("FX_DB_PATH", str(DEFAULT_DB_PATH)),
-        help="Path to SQLite database file",
+        default=None,
+        help="Path to SQLite database file (defaults to pair-specific database)",
     )
     parser.add_argument(
         "--schema-path",

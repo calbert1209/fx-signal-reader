@@ -226,7 +226,7 @@ def get_latest_yield_spread(
         "usdjpy_spot": spot_row["price"] if spot_row else None,
         "usdjpy_timestamp_utc": spot_row["timestamp_utc"] if spot_row else None,
         "spot_price": spot_row["price"] if spot_row else None,
-        "spot_symbol": spot_row["symbol"] if spot_row else clean_spot_sym,
+        "spot_symbol": (spot_row["symbol"] or clean_spot_sym) if spot_row else None,
     }
 
 
