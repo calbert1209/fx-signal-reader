@@ -5,11 +5,67 @@ and pair configuration (Task P8-06).
 
 from __future__ import annotations
 
+from pathlib import Path
+import sqlite3
+import tempfile
 import unittest
 
 from fx_signal_reader.agent.state import RiskRegime, TradeAction, TradeProposal, YieldBias
+from fx_signal_reader.backtest import run_backtest
 from fx_signal_reader.backtest.models import BacktestConfig, ExitReason, SimulatedTrade
 from fx_signal_reader.backtest.simulator import simulate_trade_resolution
+from fx_signal_reader.cli.backtest import format_backtest_summary
+from fx_signal_reader.core import DEFAULT_SCHEMA_PATH
+
+
+def _build_eurusd_replay_db(db_path: Path, *, add_blackout_event: bool = False) -> Path:
+    """Create a synthetic SQLite DB seeded with EUR/USD ticks, DE-US spreads, and events."""
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(DEFAULT_SCHEMA_PATH.read_text(encoding="utf-8"))
+        spreads = [
+            ("2026-11-01T00:00:00Z", 4.0, 4.2, 3.5, -0.70, "fixture"),
+        ]
+        conn.executemany(
+            """
+            INSERT INTO yield_spreads (timestamp_utc, us_2y, us_10y, jp_10y, spread_10y, source)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            spreads,
+        )
+        ticks = [
+            # VIX ticks to establish RISK_ON regime (<20.0)
+            ("^VIX", "2026-11-01T00:00:00Z", 16.0, 16.0, 16.0, 16.0, 0.0),
+            # Hourly EUR/USD bars
+            ("EURUSD=X", "2026-11-01T00:00:00Z", 1.08500, 1.08480, 1.08520, 1.08450, 100.0),
+            ("EURUSD=X", "2026-11-01T01:00:00Z", 1.08600, 1.08500, 1.08650, 1.08490, 100.0),
+            ("EURUSD=X", "2026-11-01T02:00:00Z", 1.08700, 1.08600, 1.08750, 1.08590, 100.0),
+            ("EURUSD=X", "2026-11-01T03:00:00Z", 1.08900, 1.08700, 1.08950, 1.08690, 100.0),
+            ("EURUSD=X", "2026-11-01T04:00:00Z", 1.09600, 1.08900, 1.09700, 1.08850, 100.0),
+            ("EURUSD=X", "2026-11-01T05:00:00Z", 1.09500, 1.09600, 1.09650, 1.09450, 100.0),
+        ]
+        conn.executemany(
+            """
+            INSERT INTO market_ticks (symbol, timestamp_utc, price, open, high, low, volume)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            ticks,
+        )
+
+        if add_blackout_event:
+            # Tier-1 ECB event within 4 hours (at 02:00Z) triggering Event Blackout veto
+            conn.execute(
+                """
+                INSERT INTO macro_events (event_hash, timestamp_utc, currency, title, impact, forecast, previous, actual)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("ecb-t1-001", "2026-11-01T02:00:00Z", "EUR", "ECB Main Refinancing Rate Decision", "High", "3.50%", "3.75%", None),
+            )
+
+        conn.commit()
+    finally:
+        conn.close()
+    return db_path
 
 
 def _sample_eurusd_proposal(**overrides) -> TradeProposal:
@@ -103,6 +159,38 @@ class TestBacktestPairGeneralization(unittest.TestCase):
         # PnL USD = -0.00515 * 20,000 = -$103.00
         self.assertAlmostEqual(trade.pnl_usd, -103.00, places=2)
         self.assertAlmostEqual(trade.r_multiple, -1.03, places=2)
+
+    def test_eurusd_end_to_end_replay_backtest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = _build_eurusd_replay_db(Path(tmpdir) / "replay_eurusd.db")
+            cfg = BacktestConfig(pair="EUR/USD", step_hours=4, spread_pips=0.0)
+            report = run_backtest(db_path=db_path, config=cfg)
+
+            self.assertEqual(report.config.pair, "EUR/USD")
+            self.assertGreaterEqual(report.metrics.trades_executed, 1)
+            self.assertGreaterEqual(report.metrics.wins, 1)
+            self.assertGreater(report.metrics.net_pnl_usd, 0.0)
+
+            trade = report.trades[0]
+            self.assertEqual(trade.pair, "EUR/USD")
+            self.assertEqual(trade.action, TradeAction.BUY)
+            self.assertEqual(trade.exit_reason, ExitReason.TAKE_PROFIT)
+            self.assertEqual(trade.pnl_jpy, 0.0)
+            self.assertAlmostEqual(trade.pnl_usd, 200.0, places=2)
+
+            summary_text = format_backtest_summary(report, db_path=db_path)
+            self.assertIn("EUR/USD Signal Reader - Historical Backtest Report", summary_text)
+            self.assertIn("EUR/USD Bars=6", summary_text)
+
+    def test_eurusd_replay_event_blackout_veto(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = _build_eurusd_replay_db(Path(tmpdir) / "replay_eurusd_blackout.db", add_blackout_event=True)
+            cfg = BacktestConfig(pair="EUR/USD", step_hours=4, spread_pips=0.0)
+            report = run_backtest(db_path=db_path, config=cfg)
+
+            self.assertEqual(report.config.pair, "EUR/USD")
+            self.assertEqual(report.metrics.trades_executed, 0)
+            self.assertGreaterEqual(report.metrics.total_vetoes, 1)
 
 
 if __name__ == "__main__":
