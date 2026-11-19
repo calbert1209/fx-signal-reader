@@ -1,9 +1,13 @@
 """
-Market Ticks and Yield Spreads Collector for USD/JPY Signal Reader.
+Market Ticks and Yield Spreads Collector for the FX Signal Reader (multi-pair).
 Ingests:
-  - Market tickers (JPY=X, ^TNX, ^GSPC, ^N225, ^VIX, GC=F) via yfinance
-  - JGB 10-Year sovereign bond yield from official Japan Ministry of Finance (MoF) CSV
-  - Computes US-Japan 10Y sovereign yield spread and writes to SQLite tables.
+  - Market tickers via yfinance (USD/JPY: JPY=X, ^TNX, ^GSPC, ^N225, ^VIX, GC=F;
+    EUR/USD: EURUSD=X, ^TNX, ^STOXX50E, ^GSPC, ^VIX, GC=F)
+  - USD/JPY: JGB 10-Year yield from the official Japan Ministry of Finance (MoF) CSV
+  - EUR/USD: German 10-Year Bund yield (DE10Y) from the Deutsche Bundesbank / ECB
+    public time-series APIs, falling back to FRED (IRLTLT01DEM156N) and then Yahoo
+  - Computes the pair's 10Y sovereign yield spread (base yield - quote yield) and
+    writes to SQLite tables.
 """
 
 from __future__ import annotations
@@ -11,7 +15,7 @@ from __future__ import annotations
 import csv
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -20,6 +24,16 @@ import yfinance as yf
 
 from fx_signal_reader.collectors.base import BaseCollector
 from fx_signal_reader.core import DEFAULT_DB_PATH, DEFAULT_SCHEMA_PATH
+from fx_signal_reader.core.pair_profile import (
+    DEFAULT_PAIR,
+    PairProfile,
+    get_pair_db_path,
+    get_pair_profile,
+)
+from fx_signal_reader.core.spread_calculator import (
+    compute_pair_spread,
+    parse_de_bund_csv,
+)
 
 
 class MarketTicksCollector(BaseCollector):
@@ -36,20 +50,57 @@ class MarketTicksCollector(BaseCollector):
         "GC=F",  # Gold Futures
     ]
 
+    # EUR/USD watchlist (German DE10Y is ingested separately, like JGB10Y for JPY).
+    EURUSD_TICKERS = [
+        "EURUSD=X",  # EUR/USD exchange rate
+        "^TNX",  # 10-Year US Treasury Note Yield
+        "^STOXX50E",  # Euro Stoxx 50 Index
+        "^GSPC",  # S&P 500 Index
+        "^VIX",  # CBOE Volatility Index
+        "GC=F",  # Gold Futures
+    ]
+
     MOF_JGB_CSV_URL = (
         "https://www.mof.go.jp/jgbs/reference/interest_rate/jgbcm.csv"
     )
 
+    # German 10Y Bund yield sources (tried in this order by fetch_de_10y_bund).
+    # 1. Deutsche Bundesbank SDMX REST API: daily Svensson-method yield of listed
+    #    Federal securities, 10.0y residual maturity (no API key required).
+    BUNDESBANK_DE10Y_URL = (
+        "https://api.statistiken.bundesbank.de/rest/data/BBSIS/"
+        "D.I.ZST.ZI.EUR.S1311.B.A604.R10XX.R.A.A._Z._Z.A"
+    )
+    # 2. ECB Data Portal: euro-area AAA 10Y spot yield curve (Bund-dominated proxy).
+    ECB_DE10Y_URL = (
+        "https://data-api.ecb.europa.eu/service/data/"
+        "YC/B.U2.EUR.4F.G_N_A.SV_C_YM.SR_10Y"
+    )
+    # 3. FRED monthly long-term German government yield (needs FRED_API_KEY).
+    FRED_DE10Y_SERIES = "IRLTLT01DEM156N"
+    # 4. Yahoo Finance proxy tickers (percent yield), last resort.
+    YAHOO_DE10Y_TICKERS = ["DE10YT=RR"]
+    DE10Y_LOOKBACK_DAYS = 14
+
     def __init__(
         self,
-        db_path: Path | str = DEFAULT_DB_PATH,
+        db_path: Path | str | None = None,
         schema_path: Path | str = DEFAULT_SCHEMA_PATH,
         max_retries: int = 3,
         backoff_factor: float = 1.0,
         jitter: bool = True,
         timeout: float = 12.0,
         fred_api_key: Optional[str] = None,
+        pair: str | PairProfile = DEFAULT_PAIR,
     ) -> None:
+        self.profile: PairProfile = get_pair_profile(pair)
+        self.pair: str = self.profile.pair
+        if db_path is None:
+            db_path = (
+                DEFAULT_DB_PATH
+                if self.profile.pair == DEFAULT_PAIR
+                else get_pair_db_path(self.profile)
+            )
         super().__init__(
             db_path=db_path,
             schema_path=schema_path,
@@ -131,6 +182,156 @@ class MarketTicksCollector(BaseCollector):
             self.logger.warning(f"FRED fetch failed for {series_id}: {exc}")
         return None
 
+    @property
+    def tickers(self) -> List[str]:
+        """Yahoo watchlist for the configured pair (USD/JPY uses `TICKERS`)."""
+        if self.profile.pair == DEFAULT_PAIR:
+            return list(self.TICKERS)
+        if self.profile.pair == "EUR/USD":
+            return list(self.EURUSD_TICKERS)
+        # Generic profile: spot, US 10Y, local equity benchmark, S&P, VIX, gold.
+        ordered = [
+            self.profile.spot_symbol,
+            "^TNX",
+            self.profile.equity_benchmark,
+            "^GSPC",
+            "^VIX",
+            "GC=F",
+        ]
+        return list(dict.fromkeys(ordered))
+
+    @property
+    def foreign_yield_symbol(self) -> str:
+        """Non-US 10Y yield symbol of the pair (JGB10Y for USD/JPY, DE10Y for EUR/USD)."""
+        p = self.profile
+        return p.quote_yield_symbol if p.is_base_usd else p.base_yield_symbol
+
+    @staticmethod
+    def _latest_from_series(series: Dict[str, float]) -> Optional[Tuple[str, float]]:
+        if not series:
+            return None
+        d = max(series)
+        return d, series[d]
+
+    def fetch_de_10y_from_bundesbank(self) -> Dict[str, Any]:
+        """Latest daily German 10Y yield from the Deutsche Bundesbank SDMX REST API."""
+        start = (
+            datetime.now(timezone.utc) - timedelta(days=self.DE10Y_LOOKBACK_DAYS)
+        ).strftime("%Y-%m-%d")
+        self.logger.info(f"Fetching DE 10Y Bund yield from Bundesbank: {self.BUNDESBANK_DE10Y_URL}")
+        resp = self.fetch_url(
+            self.BUNDESBANK_DE10Y_URL,
+            params={"format": "csv", "startPeriod": start},
+        )
+        resp.raise_for_status()
+        latest = self._latest_from_series(parse_de_bund_csv(resp.text))
+        if latest is None:
+            raise ValueError("No observations found in Bundesbank DE 10Y response.")
+        return self._de_10y_result(
+            latest[1], latest[0], "Deutsche Bundesbank (api.statistiken.bundesbank.de)"
+        )
+
+    def fetch_de_10y_from_ecb(self) -> Dict[str, Any]:
+        """Latest daily euro-area AAA 10Y yield (Bund proxy) from the ECB Data Portal."""
+        self.logger.info(f"Fetching DE 10Y proxy from ECB: {self.ECB_DE10Y_URL}")
+        resp = self.fetch_url(
+            self.ECB_DE10Y_URL,
+            params={"format": "csvdata", "lastNObservations": 10},
+        )
+        resp.raise_for_status()
+        latest = self._latest_from_series(parse_de_bund_csv(resp.text))
+        if latest is None:
+            raise ValueError("No observations found in ECB DE 10Y response.")
+        return self._de_10y_result(
+            latest[1], latest[0], "ECB Data Portal (data-api.ecb.europa.eu)"
+        )
+
+    def fetch_fred_latest_observation(
+        self, series_id: str
+    ) -> Optional[Tuple[str, float]]:
+        """Latest numeric FRED observation as (YYYY-MM-DD, value); None without API key."""
+        if not self.fred_api_key:
+            return None
+        url = "https://api.stlouisfed.org/fred/series/observations"
+        params = {
+            "series_id": series_id,
+            "api_key": self.fred_api_key,
+            "file_type": "json",
+            "sort_order": "desc",
+            "limit": 5,
+        }
+        try:
+            resp = self.fetch_url(url, params=params)
+            for obs in resp.json().get("observations", []):
+                if obs.get("value") not in (None, "", "."):
+                    return str(obs["date"])[:10], float(obs["value"])
+        except Exception as exc:
+            self.logger.warning(f"FRED fetch failed for {series_id}: {exc}")
+        return None
+
+    def fetch_de_10y_from_fred(self) -> Dict[str, Any]:
+        """German 10Y from FRED IRLTLT01DEM156N (monthly; uses FRED_API_KEY)."""
+        obs = self.fetch_fred_latest_observation(self.FRED_DE10Y_SERIES)
+        if obs is None:
+            raise ValueError("FRED DE 10Y unavailable (no API key or no observations).")
+        return self._de_10y_result(
+            obs[1], obs[0], f"FRED ({self.FRED_DE10Y_SERIES}, monthly)"
+        )
+
+    def fetch_de_10y_from_yahoo(self) -> Dict[str, Any]:
+        """Last-resort German 10Y yield proxy via Yahoo Finance tickers."""
+        for symbol in self.YAHOO_DE10Y_TICKERS:
+            try:
+                candles, _meta = self.fetch_ticker_data(symbol)
+            except Exception as exc:
+                self.logger.warning(f"Yahoo DE 10Y proxy {symbol} failed: {exc}")
+                continue
+            if candles:
+                last = candles[-1]
+                return self._de_10y_result(
+                    float(last["price"]),
+                    last["timestamp_utc"][:10],
+                    f"Yahoo Finance proxy ({symbol})",
+                )
+        raise ValueError("Yahoo DE 10Y proxy unavailable.")
+
+    @staticmethod
+    def _de_10y_result(rate: float, iso_day: str, source: str) -> Dict[str, Any]:
+        return {
+            "rate_10y": float(rate),
+            "raw_date": iso_day,
+            "timestamp_utc": f"{iso_day[:10]}T00:00:00Z",
+            "source": source,
+        }
+
+    def fetch_de_10y_bund(self) -> Dict[str, Any]:
+        """
+        Fetches the German 10-Year Bund yield (DE10Y) in percentage points.
+
+        Source order: Deutsche Bundesbank -> ECB Data Portal -> FRED
+        (IRLTLT01DEM156N) -> Yahoo proxy. Returns the same shape as
+        `fetch_jgb_10y_from_mof` (`rate_10y`, `raw_date`, `timestamp_utc` ISO-8601
+        UTC, `source`). Raises ValueError if every source fails.
+        """
+        errors: List[str] = []
+        for name, fn in (
+            ("bundesbank", self.fetch_de_10y_from_bundesbank),
+            ("ecb", self.fetch_de_10y_from_ecb),
+            ("fred", self.fetch_de_10y_from_fred),
+            ("yahoo", self.fetch_de_10y_from_yahoo),
+        ):
+            try:
+                result = fn()
+                self.logger.info(
+                    f"Successfully parsed DE 10Y: {result['rate_10y']}% "
+                    f"(date: {result['raw_date']}, source: {name})"
+                )
+                return result
+            except Exception as exc:
+                self.logger.warning(f"DE 10Y source '{name}' failed: {exc}")
+                errors.append(f"{name}: {exc}")
+        raise ValueError("All German 10Y Bund sources failed: " + "; ".join(errors))
+
     def fetch_ticker_data(
         self, symbol: str
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
@@ -191,8 +392,9 @@ class MarketTicksCollector(BaseCollector):
 
     def collect(self) -> Dict[str, Any]:
         """
-        Collects market ticks for all symbols and JGB 10Y yield,
-        writes them to `market_ticks` and `yield_spreads` tables.
+        Collects market ticks for the pair's watchlist plus its foreign 10Y yield
+        (JGB10Y for USD/JPY, DE10Y for EUR/USD), writes them to `market_ticks`
+        and the base-minus-quote spread to `yield_spreads`.
         """
         conn = self.get_connection()
         total_ticks_inserted = 0
@@ -201,7 +403,7 @@ class MarketTicksCollector(BaseCollector):
         ticker_summaries: Dict[str, Any] = {}
 
         # 1. Fetch and store yfinance market ticks
-        for symbol in self.TICKERS:
+        for symbol in self.tickers:
             try:
                 candles, meta = self.fetch_ticker_data(symbol)
                 ticker_summaries[symbol] = meta
@@ -224,68 +426,113 @@ class MarketTicksCollector(BaseCollector):
                 self.logger.error(f"Error collecting ticker {symbol}: {exc}")
                 ticker_summaries[symbol] = {"error": str(exc)}
 
-        # 2. Fetch JGB 10Y yield from MoF Japan
-        jgb_info = self.fetch_jgb_10y_from_mof()
-        jp_10y = jgb_info["rate_10y"]
-        jgb_time = jgb_info["timestamp_utc"]
+        is_jpy_pair = self.profile.pair == DEFAULT_PAIR
+        foreign_10y: Optional[float] = None
+        foreign_source = ""
+        if is_jpy_pair:
+            # 2. Fetch JGB 10Y yield from MoF Japan
+            jgb_info = self.fetch_jgb_10y_from_mof()
+            jp_10y = jgb_info["rate_10y"]
+            jgb_time = jgb_info["timestamp_utc"]
 
-        # Insert JGB 10Y into market_ticks under both JGB10Y and ^JB10YR
-        jgb_ticks = [
-            {
-                "symbol": "JGB10Y",
-                "timestamp_utc": jgb_time,
-                "price": jp_10y,
-                "open": jp_10y,
-                "high": jp_10y,
-                "low": jp_10y,
-                "volume": 0.0,
-            },
-            {
-                "symbol": "^JB10YR",
-                "timestamp_utc": jgb_time,
-                "price": jp_10y,
-                "open": jp_10y,
-                "high": jp_10y,
-                "low": jp_10y,
-                "volume": 0.0,
-            },
-        ]
-        conn.executemany(
-            """
-            INSERT OR REPLACE INTO market_ticks
-            (symbol, timestamp_utc, price, open, high, low, volume)
-            VALUES (:symbol, :timestamp_utc, :price, :open, :high, :low, :volume)
-            """,
-            jgb_ticks,
-        )
-        total_ticks_inserted += len(jgb_ticks)
+            # Insert JGB 10Y into market_ticks under both JGB10Y and ^JB10YR
+            jgb_ticks = [
+                {
+                    "symbol": "JGB10Y",
+                    "timestamp_utc": jgb_time,
+                    "price": jp_10y,
+                    "open": jp_10y,
+                    "high": jp_10y,
+                    "low": jp_10y,
+                    "volume": 0.0,
+                },
+                {
+                    "symbol": "^JB10YR",
+                    "timestamp_utc": jgb_time,
+                    "price": jp_10y,
+                    "open": jp_10y,
+                    "high": jp_10y,
+                    "low": jp_10y,
+                    "volume": 0.0,
+                },
+            ]
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO market_ticks
+                (symbol, timestamp_utc, price, open, high, low, volume)
+                VALUES (:symbol, :timestamp_utc, :price, :open, :high, :low, :volume)
+                """,
+                jgb_ticks,
+            )
+            total_ticks_inserted += len(jgb_ticks)
+            foreign_10y = jp_10y
+        else:
+            # 2b. Fetch German 10Y Bund yield (DE10Y); a total outage must not
+            # discard the Yahoo ticks already fetched, so spread stays NULL.
+            try:
+                de_info = self.fetch_de_10y_bund()
+                foreign_10y = de_info["rate_10y"]
+                foreign_source = de_info["source"]
+                de_ticks = [
+                    {
+                        "symbol": self.foreign_yield_symbol,
+                        "timestamp_utc": de_info["timestamp_utc"],
+                        "price": foreign_10y,
+                        "open": foreign_10y,
+                        "high": foreign_10y,
+                        "low": foreign_10y,
+                        "volume": 0.0,
+                    }
+                ]
+                conn.executemany(
+                    """
+                    INSERT OR REPLACE INTO market_ticks
+                    (symbol, timestamp_utc, price, open, high, low, volume)
+                    VALUES (:symbol, :timestamp_utc, :price, :open, :high, :low, :volume)
+                    """,
+                    de_ticks,
+                )
+                total_ticks_inserted += len(de_ticks)
+            except Exception as exc:
+                self.logger.error(f"German 10Y Bund yield unavailable: {exc}")
 
-        # 3. Calculate and store US-Japan 10Y yield spread
+        # 3. Calculate and store the pair's 10Y yield spread (base - quote)
         us_10y = latest_prices.get("^TNX")
         us_2y = self.fetch_fred_latest("DGS2")
 
+        # Spread = base_yield - quote_yield. USD/JPY: US10Y - JGB10Y; EUR/USD: DE10Y - US10Y.
         spread_10y: Optional[float] = None
-        if us_10y is not None and jp_10y is not None:
-            spread_10y = round(us_10y - jp_10y, 4)
+        if us_10y is not None and foreign_10y is not None:
+            if self.profile.is_base_usd:
+                spread_10y = compute_pair_spread(us_10y, foreign_10y)
+            else:
+                spread_10y = compute_pair_spread(foreign_10y, us_10y)
 
-        # Deterministic timestamp for yield spread: latest timestamp of ^TNX or JPY=X
+        # Deterministic timestamp for yield spread: latest timestamp of ^TNX or spot
         spread_timestamp = (
             latest_timestamps.get("^TNX")
-            or latest_timestamps.get("JPY=X")
+            or latest_timestamps.get(self.profile.spot_symbol)
             or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:00Z")
         )
 
+        foreign_label = "mof_japan" if is_jpy_pair else "bundesbank_de10y"
         source_label = (
-            "yfinance+mof_japan+fred" if us_2y is not None else "yfinance+mof_japan"
+            f"yfinance+{foreign_label}+fred"
+            if us_2y is not None
+            else f"yfinance+{foreign_label}"
         )
 
+        # NOTE (schema compatibility): the yield_spreads columns keep their legacy
+        # names. `jp_10y` is the pair's "foreign yield" column: JGB10Y for USD/JPY,
+        # DE10Y for EUR/USD. `us_10y` is always the US 10Y yield and `spread_10y`
+        # is base - quote (USD/JPY: US - JP; EUR/USD: DE10Y - US10Y).
         conn.execute(
             """
             INSERT OR REPLACE INTO yield_spreads
             (timestamp_utc, us_2y, us_10y, jp_10y, spread_10y, source)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (spread_timestamp, us_2y, us_10y, jp_10y, spread_10y, source_label),
+            (spread_timestamp, us_2y, us_10y, foreign_10y, spread_10y, source_label),
         )
         conn.commit()
 
@@ -305,14 +552,24 @@ class MarketTicksCollector(BaseCollector):
             "db_market_ticks_rows": db_ticks_count,
             "db_yield_spreads_rows": db_spreads_count,
             "latest_prices": latest_prices,
-            "jgb_10y": jp_10y,
-            "us_10y": us_10y,
-            "spread_10y": spread_10y,
-            "spread_timestamp": spread_timestamp,
-            "ticker_summaries": ticker_summaries,
         }
+        if is_jpy_pair:
+            summary["jgb_10y"] = jp_10y
+        else:
+            summary["pair"] = self.profile.pair
+            summary["de_10y"] = foreign_10y
+            summary["de_10y_source"] = foreign_source or None
+        summary.update(
+            {
+                "us_10y": us_10y,
+                "spread_10y": spread_10y,
+                "spread_timestamp": spread_timestamp,
+                "ticker_summaries": ticker_summaries,
+            }
+        )
+        foreign_name = "JP" if is_jpy_pair else "DE"
         self.logger.info(
             f"Market ticks collection complete: {db_ticks_count} total ticks in DB, "
-            f"10Y Spread: {spread_10y}% (US: {us_10y}%, JP: {jp_10y}%)"
+            f"10Y Spread: {spread_10y}% (US: {us_10y}%, {foreign_name}: {foreign_10y}%)"
         )
         return summary
