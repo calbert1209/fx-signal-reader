@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta, timezone
 from io import StringIO
 import math
+import re
 import sqlite3
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -63,14 +64,47 @@ class YieldSpreadRecord:
 # -----------------------------------------------------------------------------
 
 
+def compute_pair_spread(
+    base_yield: Optional[float],
+    quote_yield: Optional[float],
+    precision: int = 4,
+) -> Optional[float]:
+    """
+    Pair-agnostic sovereign yield spread:
+        `spread = round(base_yield - quote_yield, precision)`
+
+    A positive, widening spread means the base currency offers an increasing yield
+    advantage (base-currency strength). Examples:
+        - EUR/USD: base = DE 10Y Bund, quote = US 10Y  -> DE10Y - US10Y
+        - USD/JPY: base = US 10Y,      quote = JGB 10Y -> US10Y - JGB10Y
+
+    Returns:
+        Rounded float spread in percentage points, or None if either input is
+        None, NaN or infinite.
+    """
+    if base_yield is None or quote_yield is None:
+        return None
+    try:
+        b = float(base_yield)
+        q = float(quote_yield)
+        if math.isnan(b) or math.isnan(q) or math.isinf(b) or math.isinf(q):
+            return None
+        return round(b - q, precision)
+    except (ValueError, TypeError):
+        return None
+
+
 def compute_yield_spread(
     us_10y: Optional[float],
     jp_10y: Optional[float],
     precision: int = 4,
 ) -> Optional[float]:
     """
-    Computes the US10Y - JGB10Y yield spread:
+    Computes the US10Y - JGB10Y yield spread (USD/JPY, backward compatible):
         `spread_10y = round(us_10y - jp_10y, precision)`
+
+    Thin wrapper over :func:`compute_pair_spread` (USD is the base currency of
+    USD/JPY, so base_yield = us_10y and quote_yield = jp_10y).
 
     Args:
         us_10y: US 10-Year Treasury Yield (in percentage points, e.g., 5.12).
@@ -80,16 +114,28 @@ def compute_yield_spread(
     Returns:
         Rounded float spread in percentage points, or None if either input is None or NaN.
     """
-    if us_10y is None or jp_10y is None:
-        return None
-    try:
-        u = float(us_10y)
-        j = float(jp_10y)
-        if math.isnan(u) or math.isnan(j) or math.isinf(u) or math.isinf(j):
-            return None
-        return round(u - j, precision)
-    except (ValueError, TypeError):
-        return None
+    return compute_pair_spread(us_10y, jp_10y, precision=precision)
+
+
+def compute_spread_for_pair(
+    pair: Any,
+    us_10y: Optional[float],
+    foreign_10y: Optional[float],
+    precision: int = 4,
+) -> Optional[float]:
+    """
+    Computes `base_yield - quote_yield` for a pair profile given the US 10Y yield
+    and the non-US ("foreign") 10Y yield (JGB10Y for USD/JPY, DE10Y for EUR/USD).
+
+    `pair` may be a pair name or a PairProfile. The USD leg is the base for
+    USD/JPY (US - JP) and the quote for EUR/USD (DE - US).
+    """
+    from fx_signal_reader.core.pair_profile import get_pair_profile
+
+    profile = get_pair_profile(pair)
+    if profile.is_base_usd:
+        return compute_pair_spread(us_10y, foreign_10y, precision=precision)
+    return compute_pair_spread(foreign_10y, us_10y, precision=precision)
 
 
 def compute_spread_bps(
@@ -243,6 +289,61 @@ def parse_mof_csv(
             except Exception:
                 continue
 
+    return result
+
+
+def parse_de_bund_csv(csv_content: str) -> Dict[str, float]:
+    """
+    Parses a daily German 10Y Bund yield series from a Deutsche Bundesbank
+    (`format=csv`) or ECB Data Portal (`format=csvdata`) time-series download.
+
+    Supported layouts (delimiter `,` or `;`, optional UTF-8 BOM):
+      - SDMX-CSV with a header row containing `TIME_PERIOD` and `OBS_VALUE`
+        (ECB `csvdata`, Bundesbank `sdmx_csv`).
+      - Bundesbank classic CSV: data rows of `YYYY-MM-DD<delim>value[<delim>flags]`
+        (decimal comma tolerated when the delimiter is `;`). Missing observations
+        (`.`, empty) are skipped.
+
+    Returns:
+        Dictionary mapping `YYYY-MM-DD` -> yield in percentage points.
+    """
+    result: Dict[str, float] = {}
+    text = csv_content.lstrip("\ufeff")
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return result
+    delimiter = ";" if lines[0].count(";") > lines[0].count(",") else ","
+    date_re = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+    def _num(raw: str) -> Optional[float]:
+        raw = raw.strip().strip('"')
+        if delimiter == ";":
+            raw = raw.replace(",", ".")
+        return parse_float_or_none(raw)
+
+    time_idx: Optional[int] = None
+    val_idx: Optional[int] = None
+    for row in csv.reader(lines, delimiter=delimiter):
+        cells = [c.strip().strip('"') for c in row]
+        upper = [c.upper() for c in cells]
+        if "TIME_PERIOD" in upper and "OBS_VALUE" in upper:
+            time_idx = upper.index("TIME_PERIOD")
+            val_idx = upper.index("OBS_VALUE")
+            continue
+        if time_idx is not None and val_idx is not None:
+            if max(time_idx, val_idx) >= len(cells):
+                continue
+            d_raw, v_raw = cells[time_idx], cells[val_idx]
+        else:
+            d_idx = next((i for i, c in enumerate(cells) if date_re.match(c)), None)
+            if d_idx is None or d_idx + 1 >= len(cells):
+                continue
+            d_raw, v_raw = cells[d_idx], cells[d_idx + 1]
+        if not date_re.match(d_raw):
+            continue
+        val = _num(v_raw)
+        if val is not None and not math.isinf(val):
+            result[d_raw] = val
     return result
 
 
