@@ -96,11 +96,13 @@ def _make_event_record(
 def generate_historical_macro_events(
     start_date: str | date | datetime,
     end_date: str | date | datetime,
+    currencies: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Generate deterministic historical USD and JPY economic calendar events across
+    Generate deterministic historical USD, JPY, and EUR economic calendar events across
     `[start_date, end_date]` covering NFP, CPI, PPI, Retail Sales, Core PCE, GDP,
-    FOMC decisions/minutes, BoJ policy meetings, Tokyo Core CPI, and Tankan releases.
+    FOMC decisions/minutes, BoJ policy meetings, ECB rate decisions, Tokyo Core CPI, and Tankan releases.
+    When `currencies` is None, defaults to `{"USD", "JPY"}` for backward compatibility.
     """
     start_dt = _parse_bound_datetime(start_date, is_end=False)
     end_dt = _parse_bound_datetime(end_date, is_end=True)
@@ -110,35 +112,63 @@ def generate_historical_macro_events(
             f"must be <= end_date ({end_dt.strftime('%Y-%m-%dT%H:%M:%SZ')})."
         )
 
+    target_currs = (
+        frozenset(c.upper() for c in currencies)
+        if currencies is not None
+        else frozenset({"USD", "JPY"})
+    )
     events: list[dict[str, Any]] = []
     fomc_rate_months = {1, 3, 5, 6, 7, 9, 11, 12}
     fomc_minutes_months = {1, 2, 4, 5, 7, 8, 10, 11}
     boj_rate_months = {1, 3, 4, 6, 7, 9, 10, 12}
+    ecb_rate_months = {1, 3, 4, 6, 7, 9, 10, 12}
     quarterly_months = {1, 4, 7, 10}
     tankan_months = {4, 7, 10, 12}
 
     for year, month in _iter_year_months(start_dt.date(), end_dt.date()):
-        monthly_specs: list[tuple[date, int, int, str, str, str, str, str]] = [
-            (_nth_weekday_of_month(year, month, 4, 1), 13, 30, "USD", "Non-Farm Employment Change (NFP)", "High", "180K", "175K"),
-            (_nearest_weekday(year, month, 12), 13, 30, "USD", "US CPI m/m", "High", "0.3%", "0.3%"),
-            (_nearest_weekday(year, month, 14), 13, 30, "USD", "US PPI m/m", "Medium", "0.2%", "0.2%"),
-            (_nearest_weekday(year, month, 16), 13, 30, "USD", "US Retail Sales m/m", "High", "0.4%", "0.3%"),
-            (_nearest_weekday(year, month, 28), 13, 30, "USD", "US Core PCE Price Index m/m", "High", "0.2%", "0.2%"),
-            (_nearest_weekday(year, month, 24), 23, 30, "JPY", "Tokyo Core CPI y/y", "High", "2.1%", "2.0%"),
-        ]
-        if month in quarterly_months:
+        monthly_specs: list[tuple[date, int, int, str, str, str, str, str]] = []
+        if "USD" in target_currs:
+            monthly_specs.extend([
+                (_nth_weekday_of_month(year, month, 4, 1), 13, 30, "USD", "Non-Farm Employment Change (NFP)", "High", "180K", "175K"),
+                (_nearest_weekday(year, month, 12), 13, 30, "USD", "US CPI m/m", "High", "0.3%", "0.3%"),
+                (_nearest_weekday(year, month, 14), 13, 30, "USD", "US PPI m/m", "Medium", "0.2%", "0.2%"),
+                (_nearest_weekday(year, month, 16), 13, 30, "USD", "US Retail Sales m/m", "High", "0.4%", "0.3%"),
+                (_nearest_weekday(year, month, 28), 13, 30, "USD", "US Core PCE Price Index m/m", "High", "0.2%", "0.2%"),
+            ])
+            if month in quarterly_months:
+                monthly_specs.append(
+                    (_nearest_weekday(year, month, 26), 13, 30, "USD", "US Advance GDP q/q", "High", "2.4%", "2.3%")
+                )
+            if month in fomc_rate_months:
+                monthly_specs.append(
+                    (_nth_weekday_of_month(year, month, 2, 3), 18, 0, "USD", "FOMC Rate Decision & Monetary Policy Statement", "High", "4.50%", "4.50%")
+                )
+            if month in fomc_minutes_months:
+                monthly_specs.append(
+                    (_nth_weekday_of_month(year, month, 2, 1), 18, 0, "USD", "FOMC Meeting Minutes", "High", None, None)  # type: ignore[arg-type]
+                )
+
+        if "EUR" in target_currs:
             monthly_specs.append(
-                (_nearest_weekday(year, month, 26), 13, 30, "USD", "US Advance GDP q/q", "High", "2.4%", "2.3%")
+                (_nearest_weekday(year, month, 29), 9, 0, "EUR", "Eurozone Flash CPI y/y", "High", "2.2%", "2.2%")
             )
-        if month in fomc_rate_months:
+            if month in ecb_rate_months:
+                monthly_specs.append(
+                    (_nth_weekday_of_month(year, month, 3, 2), 12, 15, "EUR", "ECB Main Refinancing Rate Decision", "High", "3.25%", "3.25%")
+                )
+
+        if "JPY" in target_currs:
             monthly_specs.append(
-                (_nth_weekday_of_month(year, month, 2, 3), 18, 0, "USD", "FOMC Rate Decision & Monetary Policy Statement", "High", "4.50%", "4.50%")
+                (_nearest_weekday(year, month, 24), 23, 30, "JPY", "Tokyo Core CPI y/y", "High", "2.1%", "2.0%")
             )
-        if month in fomc_minutes_months:
-            monthly_specs.append(
-                (_nth_weekday_of_month(year, month, 2, 1), 18, 0, "USD", "FOMC Meeting Minutes", "High", None, None)  # type: ignore[arg-type]
-            )
-        if month in boj_rate_months:
+            if month in boj_rate_months:
+                monthly_specs.append(
+                    (_nth_weekday_of_month(year, month, 4, 3), 3, 0, "JPY", "BoJ Monetary Policy Statement & Policy Rate Decision", "High", "0.25%", "0.25%")
+                )
+            if month in tankan_months:
+                monthly_specs.append(
+                    (_nth_weekday_of_month(year, month, 0, 1), 23, 50, "JPY", "BoJ Tankan Large Manufacturing Index", "Medium", "13", "12")
+                )
             monthly_specs.append(
                 (_nth_weekday_of_month(year, month, 4, 3), 3, 0, "JPY", "BoJ Monetary Policy Statement & Policy Rate Decision", "High", "0.25%", "0.25%")
             )
@@ -253,7 +283,11 @@ def backfill_calendar(
 
     candidates: list[dict[str, Any]] = []
     if include_builtin_schedule:
-        candidates.extend(generate_historical_macro_events(start_dt, end_dt))
+        candidates.extend(
+            generate_historical_macro_events(
+                start_dt, end_dt, currencies=target_currencies
+            )
+        )
     for path in archive_paths or ():
         candidates.extend(parse_calendar_archive_file(path))
 

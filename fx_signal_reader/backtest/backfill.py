@@ -604,31 +604,59 @@ def backfill_de_bund_yields(
     )
     collector = MarketTicksCollector(db_path=db_path, pair="EUR/USD", fred_api_key=fred_api_key)
     rows_inserted = 0
+    series: dict[str, float] = {}
+    source = "bundesbank"
+
+    # 1. Fetch multi-year daily series from Deutsche Bundesbank SDMX REST API
     try:
-        de_info = collector.fetch_de_10y_bund()
-        rate = de_info["rate_10y"]
-        ts = de_info["timestamp_utc"]
+        url = collector.BUNDESBANK_DE10Y_URL
+        resp = collector.fetch_url(
+            url,
+            params={"format": "csv", "startPeriod": start_date_str},
+        )
+        resp.raise_for_status()
+        from fx_signal_reader.core.spread_calculator import parse_de_bund_csv
+        series = parse_de_bund_csv(resp.text)
+    except Exception as exc:
+        logger.warning(f"Bundesbank range fetch failed ({exc}); falling back to single spot.")
+
+    # 2. Fallback to latest single spot observation if range download failed
+    if not series:
+        try:
+            de_info = collector.fetch_de_10y_bund()
+            rate = de_info["rate_10y"]
+            ts = de_info["raw_date"]
+            series = {ts: rate}
+            source = de_info["source"]
+        except Exception as exc:
+            logger.warning(f"Failed to fetch DE10Y yield fallback during backfill: {exc}")
+
+    if series:
         conn = _open_db_connection(db_path)
         try:
-            conn.execute(
+            records = [
+                ("DE10Y", f"{d}T00:00:00Z", r, r, r, r, 0.0)
+                for d, r in sorted(series.items())
+                if start_date_str <= d <= end_date_str
+            ]
+            conn.executemany(
                 """
                 INSERT OR REPLACE INTO market_ticks
                 (symbol, timestamp_utc, price, open, high, low, volume)
-                VALUES (?, ?, ?, ?, ?, ?, 0.0)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                ("DE10Y", ts, rate, rate, rate, rate),
+                records,
             )
             conn.commit()
-            rows_inserted = 1
+            rows_inserted = len(records)
         finally:
             conn.close()
-    except Exception as exc:
-        logger.warning(f"Failed to fetch DE10Y yield during backfill: {exc}")
 
     return {
         "status": "SUCCESS" if rows_inserted > 0 else "PARTIAL",
         "rows_inserted": rows_inserted,
         "symbol": "DE10Y",
+        "source": source,
     }
 
 
