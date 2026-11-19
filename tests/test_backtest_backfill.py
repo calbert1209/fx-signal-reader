@@ -154,8 +154,8 @@ class TestBacktestBackfill(unittest.TestCase):
 
         self.assertEqual(summary["db_path"], str(self.db_path))
         self.assertGreater(summary["db_counts"]["market_ticks"], 0)
-        self.assertEqual(summary["db_counts"]["macro_events"], 0)
-        self.assertEqual(summary["db_counts"]["news_headlines"], 0)
+        self.assertGreater(summary["db_counts"]["macro_events"], 0)
+        self.assertGreater(summary["db_counts"]["news_headlines"], 0)
 
         if live_stat_before is not None:
             live_stat_after = DEFAULT_DB_PATH.stat()

@@ -816,6 +816,22 @@ def backfill_historical_data(
         fred_api_key=fred_api_key,
     )
 
+    from fx_signal_reader.backtest.backfill_calendar import backfill_calendar
+    from fx_signal_reader.backtest.backfill_intervention import (
+        backfill_intervention_headlines,
+    )
+
+    calendar_summary = backfill_calendar(
+        db_path=db_path,
+        start_date=resolved_start,
+        end_date=resolved_end,
+    )
+    intervention_summary = backfill_intervention_headlines(
+        db_path=db_path,
+        start_date=resolved_start,
+        end_date=resolved_end,
+    )
+
     counts_conn = _open_db_connection(db_path)
     try:
         db_counts = get_table_counts(counts_conn)
@@ -830,5 +846,7 @@ def backfill_historical_data(
         "market_ticks": ticks_summary,
         "jgb_yields": jgb_summary,
         "yield_spreads": spreads_summary,
+        "macro_events": calendar_summary,
+        "news_headlines": intervention_summary,
         "db_counts": db_counts,
     }

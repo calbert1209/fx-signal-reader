@@ -4,6 +4,11 @@ from fx_signal_reader.backtest.backfill import (
     DEFAULT_BACKTEST_DB_PATH,
     backfill_historical_data,
 )
+from fx_signal_reader.backtest.backfill_calendar import backfill_calendar
+from fx_signal_reader.backtest.backfill_intervention import (
+    CURATED_INTERVENTION_HEADLINES,
+    backfill_intervention_headlines,
+)
 from fx_signal_reader.backtest.models import (
     BacktestConfig,
     BacktestMetrics,
@@ -21,10 +26,13 @@ __all__ = [
     "BacktestConfig",
     "BacktestMetrics",
     "BacktestReport",
+    "CURATED_INTERVENTION_HEADLINES",
     "DEFAULT_BACKTEST_DB_PATH",
     "ExitReason",
     "SimulatedTrade",
+    "backfill_calendar",
     "backfill_historical_data",
+    "backfill_intervention_headlines",
     "compute_backtest_metrics",
     "run_backtest",
     "simulate_trade_resolution",
