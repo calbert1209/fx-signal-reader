@@ -205,6 +205,10 @@ def simulate_trade_resolution(
         raise ValueError("future_bars contains no bars strictly after proposal.timestamp_utc.")
 
     deadline_dt = entry_dt + timedelta(hours=config_obj.max_hold_hours)
+    breakeven_trigger_r = config_obj.breakeven_trigger_r
+    risk_per_unit = abs(entry_price - stop_loss)
+    active_sl = stop_loss
+    breakeven_armed = False
     bars_held = 0
     last_in_window_bar: _ValidatedBar | None = None
     exit_ts: str | None = None
@@ -228,16 +232,16 @@ def simulate_trade_resolution(
         last_in_window_bar = bar
 
         if proposal_obj.action == TradeAction.BUY:
-            sl_hit = bar.low <= stop_loss
+            sl_hit = bar.low <= active_sl
             tp_hit = bar.high >= take_profit
         else:
-            sl_hit = bar.high >= stop_loss
+            sl_hit = bar.high >= active_sl
             tp_hit = bar.low <= take_profit
 
         if sl_hit and tp_hit:
             if config_obj.conservative_tie_break:
-                exit_reason = ExitReason.STOP_LOSS
-                exit_price = stop_loss
+                exit_reason = ExitReason.BREAKEVEN if breakeven_armed else ExitReason.STOP_LOSS
+                exit_price = active_sl
             else:
                 exit_reason = ExitReason.TAKE_PROFIT
                 exit_price = take_profit
@@ -245,8 +249,8 @@ def simulate_trade_resolution(
             break
 
         if sl_hit:
-            exit_reason = ExitReason.STOP_LOSS
-            exit_price = stop_loss
+            exit_reason = ExitReason.BREAKEVEN if breakeven_armed else ExitReason.STOP_LOSS
+            exit_price = active_sl
             exit_ts = bar.ts
             break
 
@@ -255,6 +259,17 @@ def simulate_trade_resolution(
             exit_price = take_profit
             exit_ts = bar.ts
             break
+
+        if breakeven_trigger_r is not None and not breakeven_armed:
+            if (
+                proposal_obj.action == TradeAction.BUY
+                and bar.high >= effective_entry + breakeven_trigger_r * risk_per_unit
+            ) or (
+                proposal_obj.action == TradeAction.SELL
+                and bar.low <= effective_entry - breakeven_trigger_r * risk_per_unit
+            ):
+                active_sl = effective_entry
+                breakeven_armed = True
 
         if bar.dt == deadline_dt:
             exit_reason = ExitReason.TIME_STOP
@@ -275,7 +290,6 @@ def simulate_trade_resolution(
     pnl_jpy = round(price_delta * units, 2)
     pnl_usd = round(pnl_jpy / exit_price, 4)
 
-    risk_per_unit = abs(entry_price - stop_loss)
     r_multiple = round(price_delta / risk_per_unit, 4)
 
     return SimulatedTrade(
@@ -715,6 +729,10 @@ def run_backtest(
             run_id=run_id,
             timestamp_utc=step_ts,
             account_capital_usd=effective_config.initial_capital_usd,
+            sl_pips=effective_config.sl_pips,
+            tp_pips=effective_config.tp_pips,
+            use_atr=effective_config.use_atr,
+            allowed_regimes=[r.value for r in effective_config.allowed_regimes],
         )
         final_state = graph.invoke(
             initial_state,

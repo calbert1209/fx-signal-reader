@@ -22,11 +22,14 @@ from fx_signal_reader.core import DEFAULT_SCHEMA_PATH
 from fx_signal_reader.core.indicators import (
     classify_market_trend,
     classify_spread_momentum,
+    compute_atr_series,
     compute_ema_series,
+    compute_latest_atr,
     compute_latest_ema,
     compute_latest_sma,
     compute_rate_of_change,
     compute_sma_series,
+    compute_true_ranges,
 )
 from fx_signal_reader.mcp import server as mcp_server
 from fx_signal_reader.mcp.server import (
@@ -286,8 +289,75 @@ class TestNodeTrendAndMomentumIntegration(unittest.TestCase):
         self.assertFalse(bull_out["risk_assessment"]["veto_trade"])
         self.assertEqual(bull_out["risk_assessment"]["market_trend"], "BULLISH")
         self.assertGreater(bull_out["spot_price"], bull_out["risk_assessment"]["ema_50"])
+        self.assertIsNotNone(bull_out["risk_assessment"]["atr_14"])
+        self.assertAlmostEqual(bull_out["risk_assessment"]["atr_14"], 0.15, places=6)
         self.assertEqual(bull_out["trade_proposal"]["action"], TradeAction.BUY.value)
         self.assertEqual(bull_out["approval_status"], ApprovalStatus.PENDING.value)
+
+    def test_atr_calculation_and_dynamic_brackets_plus_allowed_regimes(self) -> None:
+        """P7-05 & P7-06: verify ATR-14 computation, dynamic brackets, and custom allowed_regimes."""
+        # Constant bar range H-L=0.50 with +0.50 step closes -> TR = [0.50, 0.75, 0.75, ...]
+        highs = [100.5 + 0.5 * i for i in range(15)]
+        lows = [100.0 + 0.5 * i for i in range(15)]
+        closes = [100.25 + 0.5 * i for i in range(15)]
+        trs = compute_true_ranges(highs, lows, closes)
+        self.assertEqual(len(trs), 15)
+        self.assertAlmostEqual(trs[0], 0.50, places=6)
+        self.assertAlmostEqual(trs[1], 0.75, places=6)
+        atr_series = compute_atr_series(highs, lows, closes, period=14)
+        self.assertIsNone(atr_series[12])
+        self.assertIsNotNone(atr_series[13])
+        self.assertAlmostEqual(compute_latest_atr(highs, lows, closes, period=14) or 0.0, 0.75, places=6)
+        self.assertIsNone(compute_latest_atr(highs[:5], lows[:5], closes[:5], period=14))
+
+        with self.assertRaises(ValueError):
+            compute_true_ranges([100.0], [101.0], [100.5])
+
+        # Verify use_atr=True scales SL/TP and units inside risk_committee_node,
+        # and custom allowed_regimes=["RISK_ON"] vetoes TRANSITIONAL VIX=20.0.
+        db_path = Path(self._tmpdir.name) / "atr_regimes.db"
+        conn = _init_temp_db(db_path)
+        try:
+            ticks = []
+            for h in range(55):
+                px = 150.0 + 0.05 * h
+                hi = px + 0.40  # wide 0.80 JPY bars -> ATR-14 ~0.80 JPY
+                lo = px - 0.40
+                ts = _utc_iso(self.base_dt, hours=h)
+                ticks.append(("JPY=X", ts, px, px, hi, lo, 0.0))
+                vix = 15.0 if h < 54 else 20.0  # Final bar TRANSITIONAL
+                ticks.append(("^VIX", ts, vix, vix, vix + 0.1, vix - 0.1, 0.0))
+            conn.executemany(
+                "INSERT INTO market_ticks (symbol, timestamp_utc, price, open, high, low, volume) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                ticks,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        as_of_ts = _utc_iso(self.base_dt, hours=53)  # RISK_ON bar
+        atr_state = create_initial_state(
+            run_id="atr-on",
+            timestamp_utc=as_of_ts,
+            use_atr=True,
+        )
+        atr_state["yield_bias"] = YieldBias.BULLISH_USD.value
+        atr_out = risk_committee_node(atr_state, db_path=str(db_path), point_in_time=True)
+        prop = atr_out["trade_proposal"]
+        self.assertEqual(prop["action"], TradeAction.BUY.value)
+        self.assertGreater(abs(prop["entry_price"] - prop["stop_loss"]), 0.75)
+
+        # TRANSITIONAL bar rejected when allowed_regimes=["RISK_ON"]
+        trans_state = create_initial_state(
+            run_id="reg-filter",
+            timestamp_utc=_utc_iso(self.base_dt, hours=54),
+            allowed_regimes=["RISK_ON"],
+        )
+        trans_state["yield_bias"] = YieldBias.BULLISH_USD.value
+        trans_out = risk_committee_node(trans_state, db_path=str(db_path), point_in_time=True)
+        self.assertTrue(trans_out["risk_assessment"]["veto_trade"])
+        self.assertIn("excluded by allowed_regimes", trans_out["risk_assessment"]["risk_notes"])
+        self.assertEqual(trans_out["trade_proposal"]["action"], TradeAction.HOLD.value)
 
 
 if __name__ == "__main__":

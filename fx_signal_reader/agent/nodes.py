@@ -124,6 +124,36 @@ def compute_position_units(
     return max(0, units)
 
 
+def compute_bracket_distances_jpy(
+    atr_14: float | None = None,
+    *,
+    use_atr: bool = False,
+    sl_pips: float | None = None,
+    tp_pips: float | None = None,
+) -> tuple[float, float]:
+    """
+    Compute Stop Loss and Take Profit distances in JPY.
+
+    When `use_atr=True` and a positive `atr_14` is available, clamps SL distance to
+    `[0.25, 2.50]` JPY and targets a `2.0 * SL` Take Profit distance. Otherwise
+    uses configured `sl_pips`/`tp_pips` overrides or the default 0.75 / 1.50 JPY brackets.
+    """
+    if use_atr and atr_14 is not None and atr_14 > 0.0:
+        sl_dist = round(max(0.25, min(2.50, float(atr_14))), 3)
+        tp_dist = round(2.0 * sl_dist, 3)
+        return sl_dist, tp_dist
+
+    has_custom_sl = sl_pips is not None and sl_pips > 0.0
+    sl_dist = round(float(sl_pips) * 0.01, 3) if has_custom_sl else STOP_LOSS_DISTANCE_JPY
+    if tp_pips is not None and tp_pips > 0.0:
+        tp_dist = round(float(tp_pips) * 0.01, 3)
+    elif has_custom_sl:
+        tp_dist = round(2.0 * sl_dist, 3)
+    else:
+        tp_dist = TAKE_PROFIT_DISTANCE_JPY
+    return sl_dist, tp_dist
+
+
 def _safe_float(value: Any) -> float | None:
     """Convert a numeric value to a finite float or return None."""
     if value is None or isinstance(value, bool):
@@ -487,6 +517,8 @@ def _build_trade_proposal(
     risk_assessment: RiskAssessment,
     account_capital_usd: float = DEFAULT_ACCOUNT_CAPITAL_USD,
     risk_fraction: float = DEFAULT_RISK_FRACTION,
+    stop_loss_distance_jpy: float = STOP_LOSS_DISTANCE_JPY,
+    take_profit_distance_jpy: float = TAKE_PROFIT_DISTANCE_JPY,
 ) -> tuple[TradeProposal, str]:
     """Synthesize a Pydantic-validated `TradeProposal` and initial `ApprovalStatus`."""
     proposal_id = f"prop-{run_id}"
@@ -525,19 +557,24 @@ def _build_trade_proposal(
     entry_price = round(spot_price, 3)
     units = compute_position_units(
         spot_price=entry_price,
-        stop_loss_distance_jpy=STOP_LOSS_DISTANCE_JPY,
+        stop_loss_distance_jpy=stop_loss_distance_jpy,
         account_capital_usd=account_capital_usd,
         risk_fraction=risk_fraction,
     )
     is_bullish = yield_bias == YieldBias.BULLISH_USD
     direction = 1 if is_bullish else -1
     action = TradeAction.BUY if is_bullish else TradeAction.SELL
-    stop_loss = round(entry_price - direction * STOP_LOSS_DISTANCE_JPY, 3)
-    take_profit = round(entry_price + direction * TAKE_PROFIT_DISTANCE_JPY, 3)
+    stop_loss = round(entry_price - direction * stop_loss_distance_jpy, 3)
+    take_profit = round(entry_price + direction * take_profit_distance_jpy, 3)
+    risk_reward_ratio = (
+        round(take_profit_distance_jpy / stop_loss_distance_jpy, 4)
+        if stop_loss_distance_jpy > 0.0
+        else 2.0
+    )
     dollar_risk = account_capital_usd * risk_fraction
     rationale = (
         f"{action.value} USD/JPY at {entry_price:.3f} "
-        f"(SL {stop_loss:.3f}, TP {take_profit:.3f}, 2.0 R:R): "
+        f"(SL {stop_loss:.3f}, TP {take_profit:.3f}, {risk_reward_ratio:.2g} R:R): "
         f"macro bias {yield_bias.value} with fixed-dollar risk sizing "
         f"({units:,} units risking ${dollar_risk:.2f} / {risk_fraction * 100:.1f}%) "
         f"and manageable intervention risk ({score:.2f}/100)."
@@ -550,7 +587,7 @@ def _build_trade_proposal(
         entry_price=entry_price,
         stop_loss=stop_loss,
         take_profit=take_profit,
-        risk_reward_ratio=2.0,
+        risk_reward_ratio=risk_reward_ratio,
         position_size_units=units,
         rationale=rationale,
         macro_bias=yield_bias,
@@ -593,6 +630,7 @@ def risk_committee_node(
     trend_summary = get_market_trend_summary(symbol="JPY=X", db_path=db_path, as_of_utc=as_of_utc)
     ema_50 = _safe_float(trend_summary.get("ema_50"))
     sma_200 = _safe_float(trend_summary.get("sma_200"))
+    atr_14 = _safe_float(trend_summary.get("atr_14"))
     raw_trend = trend_summary.get("trend")
     market_trend = str(raw_trend) if raw_trend is not None else None
 
@@ -624,6 +662,13 @@ def risk_committee_node(
         risk_regime == RiskRegime.RISK_OFF
         or (vix_level is not None and vix_level >= VIX_RISK_OFF_THRESHOLD)
     )
+    raw_allowed_regimes = state.get("allowed_regimes")
+    if isinstance(raw_allowed_regimes, (list, tuple, set)) and len(raw_allowed_regimes) > 0:
+        allowed_set = {str(r).strip().upper() for r in raw_allowed_regimes if str(r).strip()}
+        is_disallowed_regime = bool(allowed_set) and (risk_regime.value not in allowed_set)
+    else:
+        is_disallowed_regime = False
+
     is_falling_knife = bool(
         yield_bias == YieldBias.BULLISH_USD
         and spot_price is not None
@@ -634,6 +679,7 @@ def risk_committee_node(
         intervention_score >= INTERVENTION_VETO_SCORE
         or highest_tier >= 4
         or is_risk_off
+        or is_disallowed_regime
         or is_falling_knife
     )
 
@@ -659,6 +705,8 @@ def risk_committee_node(
         veto_reasons.append(f"MoF verbal tier {highest_tier} >= 4")
     if is_risk_off:
         veto_reasons.append(f"RISK_OFF regime (VIX {vix_text} >= {VIX_RISK_OFF_THRESHOLD})")
+    if is_disallowed_regime and not is_risk_off:
+        veto_reasons.append(f"regime {risk_regime.value} excluded by allowed_regimes")
     if is_falling_knife and spot_price is not None and ema_50 is not None:
         veto_reasons.append(f"trend filter veto (spot {spot_price:.3f} < EMA-50 {ema_50:.3f})")
     veto_suffix = f" [{'; '.join(veto_reasons)}]" if veto_reasons else ""
@@ -683,6 +731,7 @@ def risk_committee_node(
         flagged_headlines=flagged_headlines,
         ema_50=ema_50,
         sma_200=sma_200,
+        atr_14=atr_14,
         market_trend=market_trend,
         veto_trade=veto_trade,
         risk_notes=risk_notes,
@@ -698,6 +747,12 @@ def risk_committee_node(
         _safe_float(state.get("account_capital_usd")) or DEFAULT_ACCOUNT_CAPITAL_USD
     )
     risk_fraction = _safe_float(state.get("risk_fraction")) or DEFAULT_RISK_FRACTION
+    sl_dist, tp_dist = compute_bracket_distances_jpy(
+        atr_14=atr_14,
+        use_atr=bool(state.get("use_atr")),
+        sl_pips=_safe_float(state.get("sl_pips")),
+        tp_pips=_safe_float(state.get("tp_pips")),
+    )
     trade_proposal, approval_status = _build_trade_proposal(
         run_id=run_id,
         timestamp_utc=proposal_ts,
@@ -706,6 +761,8 @@ def risk_committee_node(
         risk_assessment=risk_assessment,
         account_capital_usd=account_capital_usd,
         risk_fraction=risk_fraction,
+        stop_loss_distance_jpy=sl_dist,
+        take_profit_distance_jpy=tp_dist,
     )
 
     audit_entry = (

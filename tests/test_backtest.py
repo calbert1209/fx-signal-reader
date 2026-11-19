@@ -293,6 +293,65 @@ class TestBacktestCLI(unittest.TestCase):
             payload = json.loads(stdout_buf.getvalue())
             self.assertEqual(payload["backfill_summary"]["market_ticks"]["rows_inserted"], 42)
 
+    def test_cli_strategy_knobs_and_summary_formatting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            db_path = _build_replay_db(tmp / "cli_knobs.db")
+
+            stdout_buf = io.StringIO()
+            with contextlib.redirect_stdout(stdout_buf):
+                rc = backtest_cli.main(
+                    [
+                        "--db-path",
+                        str(db_path),
+                        "--step-hours",
+                        "4",
+                        "--allowed-regimes",
+                        "RISK_ON",
+                        "--breakeven-r",
+                        "1.25",
+                        "--sl-pips",
+                        "60",
+                        "--tp-pips",
+                        "120",
+                    ]
+                )
+            self.assertEqual(rc, 0)
+            text_out = stdout_buf.getvalue()
+            self.assertIn("Strategy           : regimes=RISK_ON | brackets=fixed (SL=60.0p, TP=120.0p) | breakeven=+1.25R", text_out)
+
+            stdout_json = io.StringIO()
+            with contextlib.redirect_stdout(stdout_json):
+                rc2 = backtest_cli.main(
+                    [
+                        "--db-path",
+                        str(db_path),
+                        "--step-hours",
+                        "4",
+                        "--allowed-regimes",
+                        "RISK_ON,TRANSITIONAL",
+                        "--no-breakeven",
+                        "--use-atr",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(rc2, 0)
+            payload = json.loads(stdout_json.getvalue())
+            self.assertIsNone(payload["config"]["breakeven_trigger_r"])
+            self.assertTrue(payload["config"]["use_atr"])
+            self.assertEqual(payload["config"]["allowed_regimes"], ["RISK_ON", "TRANSITIONAL"])
+
+            # Verify pipeline CLI parser accepts the matching P7-06 strategy flags
+            from fx_signal_reader.cli import pipeline as pipeline_cli
+
+            p_args = pipeline_cli.build_arg_parser().parse_args(
+                ["--allowed-regimes", "RISK_ON", "--sl-pips", "80", "--tp-pips", "160", "--use-atr"]
+            )
+            self.assertEqual(p_args.allowed_regimes, "RISK_ON")
+            self.assertEqual(p_args.sl_pips, 80.0)
+            self.assertEqual(p_args.tp_pips, 160.0)
+            self.assertTrue(p_args.use_atr)
+
 
 if __name__ == "__main__":
     unittest.main()

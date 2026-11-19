@@ -27,10 +27,12 @@ from fx_signal_reader.collectors.market_ticks import MarketTicksCollector
 from fx_signal_reader.collectors.news_rss import NewsRSSCollector
 from fx_signal_reader.core import DEFAULT_DB_PATH, PROJECT_ROOT
 from fx_signal_reader.core.indicators import (
+    DEFAULT_ATR_PERIOD,
     DEFAULT_EMA_PERIOD,
     DEFAULT_SMA_PERIOD,
     classify_market_trend,
     classify_spread_momentum,
+    compute_latest_atr,
     compute_latest_ema,
     compute_latest_sma,
     compute_rate_of_change,
@@ -476,7 +478,7 @@ def get_market_trend_summary(
         if normalized_as_of is not None:
             rows = conn.execute(
                 """
-                SELECT timestamp_utc, price
+                SELECT timestamp_utc, price, high, low
                 FROM market_ticks
                 WHERE symbol = ? AND timestamp_utc <= ?
                 ORDER BY timestamp_utc DESC
@@ -487,7 +489,7 @@ def get_market_trend_summary(
         else:
             rows = conn.execute(
                 """
-                SELECT timestamp_utc, price
+                SELECT timestamp_utc, price, high, low
                 FROM market_ticks
                 WHERE symbol = ?
                 ORDER BY timestamp_utc DESC
@@ -499,11 +501,21 @@ def get_market_trend_summary(
         conn.close()
 
     chronological_rows = list(reversed(rows))
-    prices = [float(r["price"]) for r in chronological_rows if r["price"] is not None]
+    valid_rows = [r for r in chronological_rows if r["price"] is not None]
+    prices = [float(r["price"]) for r in valid_rows]
+    highs = [
+        float(r["high"]) if (r["high"] is not None and float(r["high"]) >= float(r["price"])) else float(r["price"])
+        for r in valid_rows
+    ]
+    lows = [
+        float(r["low"]) if (r["low"] is not None and float(r["low"]) <= float(r["price"])) else float(r["price"])
+        for r in valid_rows
+    ]
     spot_price = prices[-1] if prices else None
-    latest_ts = chronological_rows[-1]["timestamp_utc"] if chronological_rows else None
+    latest_ts = valid_rows[-1]["timestamp_utc"] if valid_rows else None
     ema_50 = compute_latest_ema(prices, validated_ema)
     sma_200 = compute_latest_sma(prices, validated_sma)
+    atr_14 = compute_latest_atr(highs, lows, prices, period=DEFAULT_ATR_PERIOD) if prices else None
     trend = classify_market_trend(spot_price, ema_50, sma_200) if spot_price is not None else None
 
     return {
@@ -513,6 +525,7 @@ def get_market_trend_summary(
         "spot_price": spot_price,
         "ema_50": ema_50,
         "sma_200": sma_200,
+        "atr_14": atr_14,
         "trend": trend,
         "bars_count": len(prices),
     }

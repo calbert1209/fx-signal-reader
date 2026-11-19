@@ -72,6 +72,7 @@ class RiskAssessment(BaseModel):
     flagged_headlines: list[dict[str, Any]] = Field(default_factory=list)
     ema_50: float | None = None
     sma_200: float | None = None
+    atr_14: float | None = None
     market_trend: str | None = None
     veto_trade: bool = False
     risk_notes: str
@@ -130,6 +131,10 @@ class AgentState(TypedDict):
     audit_log: Annotated[list[str], operator.add]
     account_capital_usd: float | None
     risk_fraction: float | None
+    sl_pips: float | None
+    tp_pips: float | None
+    use_atr: bool | None
+    allowed_regimes: list[str] | None
 
 
 def create_initial_state(
@@ -137,6 +142,10 @@ def create_initial_state(
     timestamp_utc: str | None = None,
     account_capital_usd: float | None = None,
     risk_fraction: float | None = None,
+    sl_pips: float | None = None,
+    tp_pips: float | None = None,
+    use_atr: bool | None = None,
+    allowed_regimes: list[str] | None = None,
 ) -> AgentState:
     """
     Create a normalized initial `AgentState` dictionary for a LangGraph pipeline run.
@@ -147,6 +156,10 @@ def create_initial_state(
             `normalizer.normalize_datetime_utc`); defaults to current UTC time.
         account_capital_usd: Optional total account equity in USD (defaults to 10,000.0).
         risk_fraction: Optional risk fraction per trade (defaults to 0.01 / 1.0%).
+        sl_pips: Optional custom fixed Stop Loss distance in pips (default 75.0).
+        tp_pips: Optional custom fixed Take Profit distance in pips (default 150.0).
+        use_atr: Optional toggle for ATR-14 dynamic Stop Loss / Take Profit brackets.
+        allowed_regimes: Optional list of permitted RiskRegime names (e.g. ["RISK_ON", "TRANSITIONAL"]).
 
     Returns:
         Initialized `AgentState` dictionary with safe neutral defaults.
@@ -174,6 +187,10 @@ def create_initial_state(
         audit_log=[],
         account_capital_usd=10000.0 if account_capital_usd is None else float(account_capital_usd),
         risk_fraction=0.01 if risk_fraction is None else float(risk_fraction),
+        sl_pips=float(sl_pips) if sl_pips is not None else None,
+        tp_pips=float(tp_pips) if tp_pips is not None else None,
+        use_atr=bool(use_atr) if use_atr is not None else None,
+        allowed_regimes=list(allowed_regimes) if allowed_regimes is not None else None,
     )
 
 

@@ -13,6 +13,7 @@ from typing import Sequence
 
 DEFAULT_EMA_PERIOD = 50
 DEFAULT_SMA_PERIOD = 200
+DEFAULT_ATR_PERIOD = 14
 
 SPREAD_CONTRACTING_5D_THRESHOLD = -0.10
 SPREAD_CONTRACTING_20D_THRESHOLD = -0.20
@@ -154,3 +155,58 @@ def classify_spread_momentum(
     ):
         return "EXPANDING"
     return "STABLE"
+
+
+def compute_true_ranges(
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+) -> list[float]:
+    """Compute True Range sequence for OHLC bars with strict finiteness and high >= low validation."""
+    h_vals = _coerce_finite_float_sequence(highs)
+    l_vals = _coerce_finite_float_sequence(lows)
+    c_vals = _coerce_finite_float_sequence(closes)
+    if not (len(h_vals) == len(l_vals) == len(c_vals)):
+        raise ValueError(
+            f"highs ({len(h_vals)}), lows ({len(l_vals)}), and closes ({len(c_vals)}) must have equal length."
+        )
+    if not c_vals:
+        return []
+
+    out: list[float] = []
+    for idx, (h, l) in enumerate(zip(h_vals, l_vals)):
+        if h < l:
+            raise ValueError(f"Bar high ({h}) cannot be less than low ({l}) at index {idx}.")
+        if idx == 0:
+            tr = h - l
+        else:
+            prev_c = c_vals[idx - 1]
+            tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
+        out.append(round(tr, 6))
+    return out
+
+
+def compute_atr_series(
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+    period: int = DEFAULT_ATR_PERIOD,
+) -> list[float | None]:
+    """Compute rolling Average True Range (ATR) series using simple mean over `period` bars."""
+    win = _validate_positive_period(period, "period")
+    trs = compute_true_ranges(highs, lows, closes)
+    return compute_sma_series(trs, period=win)
+
+
+def compute_latest_atr(
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+    period: int = DEFAULT_ATR_PERIOD,
+) -> float | None:
+    """Return the latest ATR value, or None if fewer than `period` bars exist."""
+    win = _validate_positive_period(period, "period")
+    trs = compute_true_ranges(highs, lows, closes)
+    if len(trs) < win:
+        return None
+    return round(sum(trs[-win:]) / win, 6)

@@ -38,12 +38,28 @@ def run_signal_pipeline(
     reject: bool = False,
     reviewer_notes: str | None = None,
     interactive: bool = False,
+    allowed_regimes: str | list[str] | None = None,
+    sl_pips: float | None = None,
+    tp_pips: float | None = None,
+    use_atr: bool = False,
 ) -> dict[str, Any]:
     """
     Execute the USD/JPY LangGraph pipeline end-to-end and return a structured result payload.
     """
     if auto_approve and reject:
         raise ValueError("Cannot specify both auto_approve=True and reject=True.")
+
+    parsed_regimes: list[str] | None
+    if allowed_regimes is None:
+        parsed_regimes = None
+    elif isinstance(allowed_regimes, str):
+        parsed_regimes = [r.strip().upper() for r in allowed_regimes.split(",") if r.strip()]
+        if not parsed_regimes:
+            raise ValueError("allowed_regimes cannot be empty.")
+    else:
+        parsed_regimes = [str(r).strip().upper() for r in allowed_regimes if str(r).strip()]
+        if not parsed_regimes:
+            raise ValueError("allowed_regimes cannot be empty.")
 
     resolved_thread = thread_id.strip() if thread_id and thread_id.strip() else f"run-{uuid.uuid4().hex[:12]}"
     resolved_ledger = Path(ledger_path) if ledger_path is not None else DEFAULT_LEDGER_PATH
@@ -54,7 +70,13 @@ def run_signal_pipeline(
         interrupt_on_actionable=True,
     )
     config = {"configurable": {"thread_id": resolved_thread}}
-    initial_state = create_initial_state(run_id=resolved_thread)
+    initial_state = create_initial_state(
+        run_id=resolved_thread,
+        sl_pips=sl_pips,
+        tp_pips=tp_pips,
+        use_atr=True if use_atr else None,
+        allowed_regimes=parsed_regimes,
+    )
 
     final_state = graph.invoke(initial_state, config=config)
     snapshot = graph.get_state(config)
@@ -206,6 +228,29 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Optional reviewer notes attached to the human approval decision.",
     )
     parser.add_argument(
+        "--allowed-regimes",
+        type=str,
+        default=None,
+        help="Optional comma-separated permitted risk regimes (e.g. RISK_ON,TRANSITIONAL).",
+    )
+    parser.add_argument(
+        "--sl-pips",
+        type=float,
+        default=None,
+        help="Optional custom fixed Stop Loss distance in pips (default: 75.0).",
+    )
+    parser.add_argument(
+        "--tp-pips",
+        type=float,
+        default=None,
+        help="Optional custom fixed Take Profit distance in pips (default: 150.0).",
+    )
+    parser.add_argument(
+        "--use-atr",
+        action="store_true",
+        help="Enable dynamic ATR-14 Stop Loss (1.0x ATR) and Take Profit (2.0x ATR) brackets.",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Output the complete pipeline result as JSON.",
@@ -233,6 +278,10 @@ def main(argv: list[str] | None = None) -> int:
         reject=args.reject,
         reviewer_notes=args.reviewer_notes,
         interactive=interactive,
+        allowed_regimes=args.allowed_regimes,
+        sl_pips=args.sl_pips,
+        tp_pips=args.tp_pips,
+        use_atr=args.use_atr,
     )
 
     if args.json:

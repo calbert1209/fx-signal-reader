@@ -61,6 +61,7 @@ class ExitReason(str, Enum):
 
     TAKE_PROFIT = "TAKE_PROFIT"
     STOP_LOSS = "STOP_LOSS"
+    BREAKEVEN = "BREAKEVEN"
     TIME_STOP = "TIME_STOP"
     END_OF_DATA = "END_OF_DATA"
 
@@ -79,6 +80,13 @@ class BacktestConfig(BaseModel):
     conservative_tie_break: bool = True
     mof_lookback_hours: int = Field(default=48, ge=0)
     initial_capital_usd: float = Field(default=10000.0, gt=0.0)
+    breakeven_trigger_r: float | None = Field(default=None, gt=0.0)
+    sl_pips: float = Field(default=75.0, gt=0.0)
+    tp_pips: float = Field(default=150.0, gt=0.0)
+    use_atr: bool = False
+    allowed_regimes: list[RiskRegime] = Field(
+        default_factory=lambda: [RiskRegime.RISK_ON, RiskRegime.TRANSITIONAL]
+    )
 
     @field_validator("start_utc", "end_utc", mode="before")
     @classmethod
@@ -91,11 +99,36 @@ class BacktestConfig(BaseModel):
         "mof_lookback_hours",
         "spread_pips",
         "initial_capital_usd",
+        "breakeven_trigger_r",
+        "sl_pips",
+        "tp_pips",
         mode="before",
     )
     @classmethod
     def _validate_non_bool_numbers(cls, value: Any, info: ValidationInfo) -> Any:
         return _reject_bool(value, info.field_name or "numeric_field")
+
+    @field_validator("allowed_regimes", mode="before")
+    @classmethod
+    def _validate_allowed_regimes(cls, value: Any) -> list[RiskRegime]:
+        if isinstance(value, str):
+            raw_items: list[Any] = [item.strip() for item in value.split(",") if item.strip()]
+        elif isinstance(value, (list, tuple, set)):
+            raw_items = list(value)
+        else:
+            raise ValueError(
+                "allowed_regimes must be a comma-separated string or sequence of RiskRegime values."
+            )
+        if not raw_items:
+            raise ValueError("allowed_regimes cannot be empty.")
+        normalized: list[RiskRegime] = []
+        seen: set[RiskRegime] = set()
+        for item in raw_items:
+            regime = item if isinstance(item, RiskRegime) else RiskRegime(str(item).strip().upper())
+            if regime not in seen:
+                seen.add(regime)
+                normalized.append(regime)
+        return normalized
 
     @model_validator(mode="after")
     def _validate_date_order(self) -> BacktestConfig:

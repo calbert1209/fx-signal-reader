@@ -87,6 +87,13 @@ def format_backtest_summary(
     cov = m.data_coverage
     pf_text = f"{m.profit_factor:.4f}" if m.profit_factor is not None else "n/a"
     sharpe_text = f"{m.sharpe_ratio:.4f}" if m.sharpe_ratio is not None else "n/a"
+    regimes_str = ",".join(r.value for r in cfg.allowed_regimes)
+    bracket_str = (
+        "ATR-14 (1.0x/2.0x)"
+        if cfg.use_atr
+        else f"fixed (SL={cfg.sl_pips}p, TP={cfg.tp_pips}p)"
+    )
+    be_str = f"+{cfg.breakeven_trigger_r}R" if cfg.breakeven_trigger_r is not None else "off"
 
     lines = [
         "=" * 74,
@@ -99,6 +106,7 @@ def format_backtest_summary(
             f"spread={cfg.spread_pips} pips | overlap={cfg.allow_overlapping_trades} | "
             f"conservative_tie={cfg.conservative_tie_break} | mof_lookback={cfg.mof_lookback_hours}h"
         ),
+        f"Strategy           : regimes={regimes_str} | brackets={bracket_str} | breakeven={be_str}",
     ]
 
     if backfill_summary is not None:
@@ -245,6 +253,40 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Initial portfolio capital in USD (default: 10000.0).",
     )
     parser.add_argument(
+        "--allowed-regimes",
+        type=str,
+        default="RISK_ON,TRANSITIONAL",
+        help="Comma-separated permitted risk regimes (default: RISK_ON,TRANSITIONAL).",
+    )
+    parser.add_argument(
+        "--breakeven-r",
+        type=float,
+        default=None,
+        help="Optional unrealized R-multiple threshold to ratchet Stop Loss to breakeven (default: None / disabled).",
+    )
+    parser.add_argument(
+        "--no-breakeven",
+        action="store_true",
+        help="Disable breakeven Stop Loss ratcheting.",
+    )
+    parser.add_argument(
+        "--sl-pips",
+        type=float,
+        default=75.0,
+        help="Fixed Stop Loss distance in pips when --use-atr is disabled (default: 75.0).",
+    )
+    parser.add_argument(
+        "--tp-pips",
+        type=float,
+        default=150.0,
+        help="Fixed Take Profit distance in pips when --use-atr is disabled (default: 150.0).",
+    )
+    parser.add_argument(
+        "--use-atr",
+        action="store_true",
+        help="Enable dynamic ATR-14 Stop Loss (1.0x ATR) and Take Profit (2.0x ATR) brackets.",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Output the complete BacktestReport as JSON.",
@@ -273,6 +315,7 @@ def main(argv: list[str] | None = None) -> int:
             interval=args.interval,
         )
 
+    breakeven_trigger_r = None if args.no_breakeven else args.breakeven_r
     config = BacktestConfig(
         start_utc=args.start,
         end_utc=args.end,
@@ -283,6 +326,11 @@ def main(argv: list[str] | None = None) -> int:
         conservative_tie_break=not args.optimistic_tie_break,
         mof_lookback_hours=args.mof_lookback_hours,
         initial_capital_usd=args.initial_capital,
+        breakeven_trigger_r=breakeven_trigger_r,
+        sl_pips=args.sl_pips,
+        tp_pips=args.tp_pips,
+        use_atr=args.use_atr,
+        allowed_regimes=args.allowed_regimes,
     )
     report = run_backtest(db_path=target_db, config=config)
 

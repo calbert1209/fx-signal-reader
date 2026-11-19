@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from fx_signal_reader.core.indicators import (
+    DEFAULT_ATR_PERIOD,
     DEFAULT_EMA_PERIOD,
     DEFAULT_SMA_PERIOD,
     SPREAD_CONTRACTING_5D_THRESHOLD,
@@ -11,11 +12,14 @@ from fx_signal_reader.core.indicators import (
     SPREAD_EXPANDING_20D_THRESHOLD,
     classify_market_trend,
     classify_spread_momentum,
+    compute_atr_series,
     compute_ema_series,
+    compute_latest_atr,
     compute_latest_ema,
     compute_latest_sma,
     compute_rate_of_change,
     compute_sma_series,
+    compute_true_ranges,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -23,6 +27,7 @@ DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "usdjpy_signals.db"
 DEFAULT_SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
 
 __all__ = [
+    "DEFAULT_ATR_PERIOD",
     "DEFAULT_DB_PATH",
     "DEFAULT_EMA_PERIOD",
     "DEFAULT_SCHEMA_PATH",
@@ -34,9 +39,12 @@ __all__ = [
     "SPREAD_EXPANDING_20D_THRESHOLD",
     "classify_market_trend",
     "classify_spread_momentum",
+    "compute_atr_series",
     "compute_ema_series",
+    "compute_latest_atr",
     "compute_latest_ema",
     "compute_latest_sma",
     "compute_rate_of_change",
     "compute_sma_series",
+    "compute_true_ranges",
 ]

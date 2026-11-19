@@ -92,10 +92,11 @@ class TestBacktestSchemas(unittest.TestCase):
     def test_exit_reason_enum(self):
         self.assertEqual(
             [m.value for m in ExitReason],
-            ["TAKE_PROFIT", "STOP_LOSS", "TIME_STOP", "END_OF_DATA"],
+            ["TAKE_PROFIT", "STOP_LOSS", "BREAKEVEN", "TIME_STOP", "END_OF_DATA"],
         )
         self.assertIsInstance(ExitReason.TAKE_PROFIT, str)
         self.assertEqual(ExitReason.STOP_LOSS, "STOP_LOSS")
+        self.assertEqual(ExitReason.BREAKEVEN, "BREAKEVEN")
 
     def test_backtest_config_defaults_and_normalization(self):
         cfg = BacktestConfig()
@@ -108,6 +109,7 @@ class TestBacktestSchemas(unittest.TestCase):
         self.assertTrue(cfg.conservative_tie_break)
         self.assertEqual(cfg.mof_lookback_hours, 48)
         self.assertEqual(cfg.initial_capital_usd, 10000.0)
+        self.assertIsNone(cfg.breakeven_trigger_r)
 
         cfg_norm = BacktestConfig(
             start_utc="2026-11-18T09:00:00+09:00",
@@ -501,6 +503,59 @@ class TestSimulateTradeResolutionMechanics(unittest.TestCase):
         # Determinism check
         tp_trade_2 = simulate_trade_resolution(prop, bars_tp_null, cfg)
         self.assertEqual(tp_trade, tp_trade_2)
+
+    def test_breakeven_ratchet_buy_and_sell_vs_disabled(self):
+        # BUY @ 150.000, spread=1.5p -> effective_entry=150.015, SL=149.250 (risk=0.75), TP=151.500
+        buy_prop = _sample_proposal(
+            proposal_id="be-buy",
+            action=TradeAction.BUY,
+            entry_price=150.000,
+            stop_loss=149.250,
+            take_profit=151.500,
+            position_size_units=20000,
+        )
+        # Bar 1 moves >= +1.0R (150.015 + 0.75 = 150.765 -> hits 150.85) without hitting TP;
+        # Bar 2 reverses down past entry (150.015) and original SL (149.250).
+        pullback_buy_bars = [
+            {"timestamp_utc": "2026-11-18T01:00:00Z", "high": 150.85, "low": 149.90, "close": 150.70},
+            {"timestamp_utc": "2026-11-18T02:00:00Z", "high": 150.60, "low": 149.20, "close": 149.30},
+        ]
+
+        be_buy_trade = simulate_trade_resolution(
+            buy_prop, pullback_buy_bars, BacktestConfig(spread_pips=1.5, breakeven_trigger_r=1.0)
+        )
+        self.assertEqual(be_buy_trade.exit_reason, ExitReason.BREAKEVEN)
+        self.assertEqual(be_buy_trade.exit_price, 150.015)
+        self.assertEqual(be_buy_trade.pnl_usd, 0.0)
+        self.assertEqual(be_buy_trade.r_multiple, 0.0)
+
+        sl_buy_trade = simulate_trade_resolution(
+            buy_prop, pullback_buy_bars, BacktestConfig(spread_pips=1.5, breakeven_trigger_r=None)
+        )
+        self.assertEqual(sl_buy_trade.exit_reason, ExitReason.STOP_LOSS)
+        self.assertEqual(sl_buy_trade.exit_price, 149.250)
+        self.assertLess(sl_buy_trade.pnl_usd, 0.0)
+
+        # SELL @ 150.000, spread=1.5p -> effective_entry=149.985, SL=150.750, TP=148.500
+        sell_prop = _sample_proposal(
+            proposal_id="be-sell",
+            action=TradeAction.SELL,
+            entry_price=150.000,
+            stop_loss=150.750,
+            take_profit=148.500,
+            position_size_units=20000,
+        )
+        pullback_sell_bars = [
+            {"timestamp_utc": "2026-11-18T01:00:00Z", "high": 150.10, "low": 149.15, "close": 149.30},
+            {"timestamp_utc": "2026-11-18T02:00:00Z", "high": 150.80, "low": 149.40, "close": 150.60},
+        ]
+        be_sell_trade = simulate_trade_resolution(
+            sell_prop, pullback_sell_bars, BacktestConfig(spread_pips=1.5, breakeven_trigger_r=1.0)
+        )
+        self.assertEqual(be_sell_trade.exit_reason, ExitReason.BREAKEVEN)
+        self.assertEqual(be_sell_trade.exit_price, 149.985)
+        self.assertEqual(be_sell_trade.pnl_usd, 0.0)
+        self.assertEqual(be_sell_trade.r_multiple, 0.0)
 
 
 class TestComputeBacktestMetrics(unittest.TestCase):
