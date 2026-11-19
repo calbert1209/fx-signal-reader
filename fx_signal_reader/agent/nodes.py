@@ -108,10 +108,15 @@ def compute_position_units(
     stop_loss_distance_jpy: float = STOP_LOSS_DISTANCE_JPY,
     account_capital_usd: float = DEFAULT_ACCOUNT_CAPITAL_USD,
     risk_fraction: float = DEFAULT_RISK_FRACTION,
+    is_quote_usd: bool = False,
 ) -> int:
     """
-    Compute equal-dollar risk position sizing for USD/JPY:
-    Units = floor((account_capital_usd * risk_fraction * spot_price) / stop_loss_distance_jpy)
+    Compute equal-dollar risk position sizing.
+
+    Base-is-USD (default, e.g. USD/JPY, USD/CHF; SL distance in quote currency):
+    Units = floor((account_capital_usd * risk_fraction * spot_price) / stop_loss_distance)
+    Quote-is-USD (``is_quote_usd=True``, e.g. EUR/USD, GBP/USD; SL distance in USD):
+    Units = floor((account_capital_usd * risk_fraction) / stop_loss_distance)
 
     Guarantees non-negative integer sizing; returns 0 if inputs are non-positive or invalid.
     """
@@ -120,6 +125,9 @@ def compute_position_units(
     if account_capital_usd <= 0.0 or risk_fraction <= 0.0:
         return 0
     dollar_risk = account_capital_usd * risk_fraction
+    if is_quote_usd:
+        units = int(math.floor(dollar_risk / stop_loss_distance_jpy))
+        return max(0, units)
     units = int(math.floor((dollar_risk * spot_price) / stop_loss_distance_jpy))
     return max(0, units)
 

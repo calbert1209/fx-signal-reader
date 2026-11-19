@@ -107,7 +107,7 @@ class TestStateEnums(unittest.TestCase):
     def test_enum_values_and_str_behavior(self):
         self.assertEqual(
             [m.value for m in YieldBias],
-            ["BULLISH_USD", "BEARISH_USD", "NEUTRAL"],
+            ["BULLISH", "BEARISH", "NEUTRAL"],
         )
         self.assertEqual(
             [m.value for m in RiskRegime],
@@ -127,7 +127,33 @@ class TestStateEnums(unittest.TestCase):
         )
 
         self.assertIsInstance(YieldBias.BULLISH_USD, str)
-        self.assertEqual(YieldBias.BULLISH_USD, "BULLISH_USD")
+        self.assertEqual(YieldBias.BULLISH, "BULLISH")
+        # Legacy aliases resolve to the generalized members.
+        self.assertIs(YieldBias.BULLISH_USD, YieldBias.BULLISH)
+        self.assertIs(YieldBias.BEARISH_USD, YieldBias.BEARISH)
+        self.assertEqual(YieldBias.BULLISH_USD.value, "BULLISH")
+
+    def test_legacy_yield_bias_strings_validate(self):
+        self.assertIs(YieldBias("BULLISH_USD"), YieldBias.BULLISH)
+        self.assertIs(YieldBias("BEARISH_USD"), YieldBias.BEARISH)
+        self.assertIs(YieldBias("BULLISH"), YieldBias.BULLISH)
+        with self.assertRaises(ValueError):
+            YieldBias("SIDEWAYS_USD")
+        for legacy, expected in (("BULLISH_USD", YieldBias.BULLISH), ("BEARISH_USD", YieldBias.BEARISH)):
+            macro = MacroAssessment.model_validate(_sample_macro_payload(yield_bias=legacy))
+            self.assertIs(macro.yield_bias, expected)
+            proposal = TradeProposal.model_validate(_sample_proposal_payload(macro_bias=legacy))
+            self.assertIs(proposal.macro_bias, expected)
+            self.assertEqual(proposal.model_dump(mode="json")["macro_bias"], expected.value)
+        macro_new = MacroAssessment.model_validate(_sample_macro_payload(yield_bias="BEARISH"))
+        self.assertIs(macro_new.yield_bias, YieldBias.BEARISH)
+        with self.assertRaises(ValidationError):
+            MacroAssessment.model_validate(_sample_macro_payload(yield_bias="SIDEWAYS_USD"))
+
+    def test_create_initial_state_pair_default_and_override(self):
+        self.assertEqual(create_initial_state()["pair"], "USD/JPY")
+        self.assertEqual(create_initial_state(pair="EUR/USD")["pair"], "EUR/USD")
+        self.assertEqual(TradeProposal.model_validate(_sample_proposal_payload()).pair, "USD/JPY")
         self.assertEqual(ApprovalStatus.NOT_REQUIRED, "NOT_REQUIRED")
 
 
@@ -243,7 +269,7 @@ class TestPydanticValidationAndBounds(unittest.TestCase):
         macro = MacroAssessment.model_validate(_sample_macro_payload())
         macro_json = macro.model_dump(mode="json")
         self.assertIs(type(macro_json["yield_bias"]), str)
-        self.assertEqual(macro_json["yield_bias"], "BULLISH_USD")
+        self.assertEqual(macro_json["yield_bias"], "BULLISH")
 
         risk = RiskAssessment.model_validate(_sample_risk_payload())
         risk_json = risk.model_dump(mode="json")
@@ -258,7 +284,7 @@ class TestPydanticValidationAndBounds(unittest.TestCase):
         self.assertIs(type(proposal_json["macro_bias"]), str)
         self.assertIs(type(proposal_json["risk_regime"]), str)
         self.assertEqual(proposal_json["action"], "BUY")
-        self.assertEqual(proposal_json["macro_bias"], "BULLISH_USD")
+        self.assertEqual(proposal_json["macro_bias"], "BULLISH")
         self.assertEqual(proposal_json["risk_regime"], "RISK_ON")
 
         # Verify full round-trip through json.dumps/json.loads
@@ -426,7 +452,7 @@ class TestLangGraphStateCompilation(unittest.TestCase):
 
         self.assertEqual(final_state["run_id"], "graph-run-001")
         self.assertEqual(final_state["spot_price"], 159.138)
-        self.assertEqual(final_state["yield_bias"], "BULLISH_USD")
+        self.assertEqual(final_state["yield_bias"], "BULLISH")
         self.assertEqual(final_state["risk_regime"], "RISK_ON")
         self.assertEqual(final_state["intervention_risk_score"], 42.5)
         self.assertEqual(final_state["approval_status"], "PENDING")
@@ -436,7 +462,7 @@ class TestLangGraphStateCompilation(unittest.TestCase):
             final_state["audit_log"],
             [
                 "init:pipeline_started",
-                "macro_analyst:graph-run-001:yield_bias=BULLISH_USD",
+                "macro_analyst:graph-run-001:yield_bias=BULLISH",
                 "risk_committee:regime=RISK_ON:score=42.5",
                 "proposal_node:action=BUY:id=prop-20261118-001",
             ],

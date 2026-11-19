@@ -18,11 +18,35 @@ from fx_signal_reader.core.normalizer import normalize_datetime_utc
 
 
 class YieldBias(str, Enum):
-    """Directional USD/JPY bias implied by sovereign yield spreads and policy."""
+    """Directional bias implied by sovereign yield spreads and policy.
 
-    BULLISH_USD = "BULLISH_USD"
-    BEARISH_USD = "BEARISH_USD"
+    ``BULLISH`` favours appreciation of the base currency (BUY); ``BEARISH``
+    favours the quote currency (SELL). Legacy USD/JPY names ``BULLISH_USD`` /
+    ``BEARISH_USD`` remain as enum aliases, and legacy strings are accepted on input.
+    """
+
+    BULLISH = "BULLISH"
+    BEARISH = "BEARISH"
     NEUTRAL = "NEUTRAL"
+
+    # Backward-compatible aliases (same members as BULLISH / BEARISH).
+    BULLISH_USD = "BULLISH"
+    BEARISH_USD = "BEARISH"
+
+    @classmethod
+    def _missing_(cls, value: object) -> "YieldBias | None":
+        """Accept legacy serialized values ``"BULLISH_USD"`` / ``"BEARISH_USD"``."""
+        if isinstance(value, str):
+            legacy = _LEGACY_YIELD_BIAS_VALUES.get(value.strip().upper())
+            if legacy is not None:
+                return cls(legacy)
+        return None
+
+
+_LEGACY_YIELD_BIAS_VALUES: dict[str, str] = {
+    "BULLISH_USD": "BULLISH",
+    "BEARISH_USD": "BEARISH",
+}
 
 
 class MacroAssessment(BaseModel):
@@ -118,6 +142,7 @@ class AgentState(TypedDict):
 
     run_id: str
     timestamp_utc: str
+    pair: str
     spot_price: float | None
     yield_bias: str
     macro_assessment: dict[str, Any] | None
@@ -146,6 +171,7 @@ def create_initial_state(
     tp_pips: float | None = None,
     use_atr: bool | None = None,
     allowed_regimes: list[str] | None = None,
+    pair: str = "USD/JPY",
 ) -> AgentState:
     """
     Create a normalized initial `AgentState` dictionary for a LangGraph pipeline run.
@@ -160,6 +186,7 @@ def create_initial_state(
         tp_pips: Optional custom fixed Take Profit distance in pips (default 150.0).
         use_atr: Optional toggle for ATR-14 dynamic Stop Loss / Take Profit brackets.
         allowed_regimes: Optional list of permitted RiskRegime names (e.g. ["RISK_ON", "TRANSITIONAL"]).
+        pair: Currency pair symbol for this run (defaults to "USD/JPY").
 
     Returns:
         Initialized `AgentState` dictionary with safe neutral defaults.
@@ -174,6 +201,7 @@ def create_initial_state(
     return AgentState(
         run_id=resolved_run_id,
         timestamp_utc=resolved_timestamp,
+        pair=pair.strip() if isinstance(pair, str) and pair.strip() else "USD/JPY",
         spot_price=None,
         yield_bias=YieldBias.NEUTRAL.value,
         macro_assessment=None,

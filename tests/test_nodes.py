@@ -420,6 +420,23 @@ class TestSpecialistNodesScenarios(unittest.TestCase):
         self.assertEqual(compute_position_units(150.0, account_capital_usd=0.0), 0)
         self.assertEqual(compute_position_units(150.0, risk_fraction=-0.01), 0)
 
+    def test_compute_position_units_quote_usd_eurusd(self) -> None:
+        """P8-02: quote-is-USD sizing ignores spot: floor(capital * risk / sl_distance)."""
+        from fx_signal_reader.agent.nodes import compute_position_units
+
+        # $100 risk on 50-pip (0.0050) SL -> 20,000 units; spot-independent
+        self.assertEqual(compute_position_units(1.0850, 0.0050, 10000.0, 0.01, is_quote_usd=True), 20000)
+        self.assertEqual(compute_position_units(1.2000, 0.0050, 10000.0, 0.01, is_quote_usd=True), 20000)
+        self.assertEqual(compute_position_units(1.0850, 0.0030, 10000.0, 0.01, is_quote_usd=True), 33333)
+        self.assertEqual(compute_position_units(1.0850, 0.0050, 10000.0, 0.02, is_quote_usd=True), 40000)
+        # Guards
+        self.assertEqual(compute_position_units(None, 0.0050, is_quote_usd=True), 0)
+        self.assertEqual(compute_position_units(1.0850, 0.0, is_quote_usd=True), 0)
+        self.assertEqual(compute_position_units(1.0850, 0.0050, 0.0, 0.01, is_quote_usd=True), 0)
+        self.assertEqual(compute_position_units(1.0850, 0.0050, 10000.0, -0.01, is_quote_usd=True), 0)
+        # Default path unchanged for base-is-USD
+        self.assertEqual(compute_position_units(150.0, 0.75, 10000.0, 0.01, is_quote_usd=False), 20000)
+
     def test_spot_barrier_bonuses_and_clamping(self) -> None:
         """Verify spot proximity adjustments around 157.0, 158.5, and 160.0 and [0, 100] clamping."""
         cases = [

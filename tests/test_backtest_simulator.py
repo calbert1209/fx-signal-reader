@@ -686,8 +686,8 @@ class TestComputeBacktestMetrics(unittest.TestCase):
         self.assertEqual(metrics.breakdown_by_regime["RISK_OFF"]["profit_factor"], 0.0)
 
         # Bias breakdown checks
-        self.assertEqual(metrics.breakdown_by_bias["BULLISH_USD"]["net_pnl_usd"], 1300.0)
-        self.assertEqual(metrics.breakdown_by_bias["BEARISH_USD"]["net_pnl_usd"], -1300.0)
+        self.assertEqual(metrics.breakdown_by_bias["BULLISH"]["net_pnl_usd"], 1300.0)
+        self.assertEqual(metrics.breakdown_by_bias["BEARISH"]["net_pnl_usd"], -1300.0)
         self.assertEqual(metrics.breakdown_by_bias["NEUTRAL"]["count"], 0)
 
         # All-wins -> profit_factor is None
