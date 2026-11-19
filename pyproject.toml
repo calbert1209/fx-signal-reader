@@ -21,6 +21,7 @@ fx-schedule = "fx_signal_reader.cli.schedule:main"
 fx-mcp = "fx_signal_reader.mcp.server:main"
 fx-mcp-client = "fx_signal_reader.mcp.client:main"
 fx-pipeline = "fx_signal_reader.cli.pipeline:main"
+fx-backtest = "fx_signal_reader.cli.backtest:main"
 
 [tool.setuptools.packages.find]
 include = ["fx_signal_reader*"]
