@@ -193,7 +193,7 @@ class TestSpecialistNodesScenarios(unittest.TestCase):
         self.assertEqual(proposal.stop_loss, 151.25)
         self.assertEqual(proposal.take_profit, 153.5)
         self.assertEqual(proposal.risk_reward_ratio, 2.0)
-        self.assertEqual(proposal.position_size_units, 10000)
+        self.assertEqual(proposal.position_size_units, 20266)
         self.assertEqual(len(final_state["audit_log"]), 2)
 
         # Ensure entire state is strictly JSON serializable for checkpointers
@@ -231,7 +231,7 @@ class TestSpecialistNodesScenarios(unittest.TestCase):
         self.assertEqual(proposal.stop_loss, 145.75)
         self.assertEqual(proposal.take_profit, 143.5)
         self.assertEqual(proposal.risk_reward_ratio, 2.0)
-        self.assertEqual(proposal.position_size_units, 5000)
+        self.assertEqual(proposal.position_size_units, 19333)
 
     def test_scenario_c_intervention_veto(self) -> None:
         """Wide spread (+2.30%), spot 159.50, Tier 4 'rate check' headline -> veto & HOLD NOT_REQUIRED."""
@@ -359,8 +359,8 @@ class TestSpecialistNodesScenarios(unittest.TestCase):
         self.assertLessEqual(quiet_conf, 1.0)
         self.assertIn("FOMC Meeting Minutes", catalyst_out["macro_assessment"]["policy_divergence_summary"])
 
-    def test_risk_off_sizing_vs_elevated_intervention_veto(self) -> None:
-        """RISK_OFF scales BUY to 2500 units when calm, but vetoes BULLISH_USD if intervention is elevated."""
+    def test_risk_off_regime_unconditionally_vetoes_entries(self) -> None:
+        """P7-01: RISK_OFF (VIX >= 25.0) unconditionally vetoes new trade entries (action=HOLD)."""
         calm_risk_off_db = _create_fixture_db(
             self.temp_dir / "risk_off_calm.db",
             ticks=_standard_ticks(spot=152.0, vix=26.5),
@@ -370,10 +370,11 @@ class TestSpecialistNodesScenarios(unittest.TestCase):
         calm_out = risk_committee_node(base_state, db_path=str(calm_risk_off_db))
 
         self.assertEqual(calm_out["risk_regime"], RiskRegime.RISK_OFF.value)
-        self.assertFalse(calm_out["risk_assessment"]["veto_trade"])
-        self.assertEqual(calm_out["trade_proposal"]["action"], TradeAction.BUY.value)
-        self.assertEqual(calm_out["trade_proposal"]["position_size_units"], 2500)
-        self.assertEqual(calm_out["approval_status"], ApprovalStatus.PENDING.value)
+        self.assertTrue(calm_out["risk_assessment"]["veto_trade"])
+        self.assertEqual(calm_out["trade_proposal"]["action"], TradeAction.HOLD.value)
+        self.assertEqual(calm_out["trade_proposal"]["position_size_units"], 0)
+        self.assertEqual(calm_out["approval_status"], ApprovalStatus.NOT_REQUIRED.value)
+        self.assertIn("RISK_OFF regime", calm_out["risk_assessment"]["risk_notes"])
 
         elevated_risk_off_db = _create_fixture_db(
             self.temp_dir / "risk_off_elevated.db",
@@ -396,6 +397,28 @@ class TestSpecialistNodesScenarios(unittest.TestCase):
         self.assertEqual(elevated_out["trade_proposal"]["action"], TradeAction.HOLD.value)
         self.assertEqual(elevated_out["trade_proposal"]["position_size_units"], 0)
         self.assertEqual(elevated_out["approval_status"], ApprovalStatus.NOT_REQUIRED.value)
+
+    def test_compute_position_units_bounds_and_risk_sizing(self) -> None:
+        """P7-02: compute_position_units satisfies equal-dollar risk bounds and zero guards."""
+        from fx_signal_reader.agent.nodes import compute_position_units
+
+        # Spot 150.00, SL 0.75, $10,000 capital, 1% ($100) -> 20,000 units
+        self.assertEqual(compute_position_units(150.0, 0.75, 10000.0, 0.01), 20000)
+        # Spot 152.00, SL 0.75, $10,000 capital, 1% ($100) -> 20,266 units
+        self.assertEqual(compute_position_units(152.0, 0.75, 10000.0, 0.01), 20266)
+        # Spot 145.00, SL 0.75, $10,000 capital, 1% ($100) -> 19,333 units
+        self.assertEqual(compute_position_units(145.0, 0.75, 10000.0, 0.01), 19333)
+        # 2% risk ($200) -> 40,000 units
+        self.assertEqual(compute_position_units(150.0, 0.75, 10000.0, 0.02), 40000)
+        # Wider SL (1.50 JPY) -> 10,000 units
+        self.assertEqual(compute_position_units(150.0, 1.50, 10000.0, 0.01), 10000)
+        # Invalid / non-positive guards
+        self.assertEqual(compute_position_units(None), 0)
+        self.assertEqual(compute_position_units(0.0), 0)
+        self.assertEqual(compute_position_units(-150.0), 0)
+        self.assertEqual(compute_position_units(150.0, stop_loss_distance_jpy=0.0), 0)
+        self.assertEqual(compute_position_units(150.0, account_capital_usd=0.0), 0)
+        self.assertEqual(compute_position_units(150.0, risk_fraction=-0.01), 0)
 
     def test_spot_barrier_bonuses_and_clamping(self) -> None:
         """Verify spot proximity adjustments around 157.0, 158.5, and 160.0 and [0, 100] clamping."""

@@ -91,6 +91,8 @@ INTERVENTION_VETO_SCORE = 70.0
 ELEVATED_INTERVENTION_FOR_RISK_OFF = 35.0
 
 # Trade sizing & bracket defaults (2.0 risk-reward ratio)
+DEFAULT_ACCOUNT_CAPITAL_USD = 10000.0
+DEFAULT_RISK_FRACTION = 0.01  # 1.0% = $100 fixed dollar risk per $10k account capital
 POSITION_UNITS_BY_REGIME: dict[RiskRegime, int] = {
     RiskRegime.RISK_ON: 10000,
     RiskRegime.TRANSITIONAL: 5000,
@@ -98,6 +100,27 @@ POSITION_UNITS_BY_REGIME: dict[RiskRegime, int] = {
 }
 STOP_LOSS_DISTANCE_JPY = 0.75
 TAKE_PROFIT_DISTANCE_JPY = 1.50
+
+
+def compute_position_units(
+    spot_price: float | None,
+    stop_loss_distance_jpy: float = STOP_LOSS_DISTANCE_JPY,
+    account_capital_usd: float = DEFAULT_ACCOUNT_CAPITAL_USD,
+    risk_fraction: float = DEFAULT_RISK_FRACTION,
+) -> int:
+    """
+    Compute equal-dollar risk position sizing for USD/JPY:
+    Units = floor((account_capital_usd * risk_fraction * spot_price) / stop_loss_distance_jpy)
+
+    Guarantees non-negative integer sizing; returns 0 if inputs are non-positive or invalid.
+    """
+    if spot_price is None or spot_price <= 0.0 or stop_loss_distance_jpy <= 0.0:
+        return 0
+    if account_capital_usd <= 0.0 or risk_fraction <= 0.0:
+        return 0
+    dollar_risk = account_capital_usd * risk_fraction
+    units = int(math.floor((dollar_risk * spot_price) / stop_loss_distance_jpy))
+    return max(0, units)
 
 
 def _safe_float(value: Any) -> float | None:
@@ -436,6 +459,8 @@ def _build_trade_proposal(
     spot_price: float | None,
     yield_bias: YieldBias,
     risk_assessment: RiskAssessment,
+    account_capital_usd: float = DEFAULT_ACCOUNT_CAPITAL_USD,
+    risk_fraction: float = DEFAULT_RISK_FRACTION,
 ) -> tuple[TradeProposal, str]:
     """Synthesize a Pydantic-validated `TradeProposal` and initial `ApprovalStatus`."""
     proposal_id = f"prop-{run_id}"
@@ -472,17 +497,24 @@ def _build_trade_proposal(
         return proposal, ApprovalStatus.NOT_REQUIRED.value
 
     entry_price = round(spot_price, 3)
-    units = POSITION_UNITS_BY_REGIME[regime]
+    units = compute_position_units(
+        spot_price=entry_price,
+        stop_loss_distance_jpy=STOP_LOSS_DISTANCE_JPY,
+        account_capital_usd=account_capital_usd,
+        risk_fraction=risk_fraction,
+    )
     is_bullish = yield_bias == YieldBias.BULLISH_USD
     direction = 1 if is_bullish else -1
     action = TradeAction.BUY if is_bullish else TradeAction.SELL
     stop_loss = round(entry_price - direction * STOP_LOSS_DISTANCE_JPY, 3)
     take_profit = round(entry_price + direction * TAKE_PROFIT_DISTANCE_JPY, 3)
+    dollar_risk = account_capital_usd * risk_fraction
     rationale = (
         f"{action.value} USD/JPY at {entry_price:.3f} "
         f"(SL {stop_loss:.3f}, TP {take_profit:.3f}, 2.0 R:R): "
-        f"macro bias {yield_bias.value} with {regime.value} sizing "
-        f"({units} units) and manageable intervention risk ({score:.2f}/100)."
+        f"macro bias {yield_bias.value} with fixed-dollar risk sizing "
+        f"({units:,} units risking ${dollar_risk:.2f} / {risk_fraction * 100:.1f}%) "
+        f"and manageable intervention risk ({score:.2f}/100)."
     )
 
     proposal = TradeProposal(
@@ -557,18 +589,14 @@ def risk_committee_node(
     except ValueError:
         yield_bias = YieldBias.NEUTRAL
 
-    elevated_in_risk_off = (
-        yield_bias == YieldBias.BULLISH_USD
-        and risk_regime == RiskRegime.RISK_OFF
-        and (
-            intervention_score >= ELEVATED_INTERVENTION_FOR_RISK_OFF
-            or highest_tier >= 2
-        )
+    is_risk_off = (
+        risk_regime == RiskRegime.RISK_OFF
+        or (vix_level is not None and vix_level >= VIX_RISK_OFF_THRESHOLD)
     )
     veto_trade = bool(
         intervention_score >= INTERVENTION_VETO_SCORE
         or highest_tier >= 4
-        or elevated_in_risk_off
+        or is_risk_off
     )
 
     flagged_headlines = [
@@ -586,12 +614,21 @@ def risk_committee_node(
 
     vix_text = f"{vix_level:.2f}" if vix_level is not None else "n/a"
     spot_text = f"{spot_price:.3f}" if spot_price is not None else "n/a"
+    veto_reasons: list[str] = []
+    if intervention_score >= INTERVENTION_VETO_SCORE:
+        veto_reasons.append(f"intervention score {intervention_score:.2f} >= {INTERVENTION_VETO_SCORE}")
+    if highest_tier >= 4:
+        veto_reasons.append(f"MoF verbal tier {highest_tier} >= 4")
+    if is_risk_off:
+        veto_reasons.append(f"RISK_OFF regime (VIX {vix_text} >= {VIX_RISK_OFF_THRESHOLD})")
+    veto_suffix = f" [{'; '.join(veto_reasons)}]" if veto_reasons else ""
+
     risk_notes = (
         f"Regime={risk_regime.value} (VIX={vix_text}); USD/JPY spot={spot_text}; "
         f"MoF Tier {highest_tier} across {len(mof_alerts)} alert(s) -> "
         f"score={intervention_score:.2f} [{alert_level.value}] "
         f"(base={breakdown['base_score']:.1f}, volume={breakdown['volume_bonus']:.1f}, "
-        f"spot={breakdown['spot_bonus']:.1f}); veto_trade={veto_trade}."
+        f"spot={breakdown['spot_bonus']:.1f}); veto_trade={veto_trade}{veto_suffix}."
     )
 
     risk_assessment = RiskAssessment(
@@ -614,12 +651,18 @@ def risk_committee_node(
         if as_of_utc is not None
         else normalize_datetime_utc(state.get("timestamp_utc"), fallback_now=True)
     )
+    account_capital_usd = (
+        _safe_float(state.get("account_capital_usd")) or DEFAULT_ACCOUNT_CAPITAL_USD
+    )
+    risk_fraction = _safe_float(state.get("risk_fraction")) or DEFAULT_RISK_FRACTION
     trade_proposal, approval_status = _build_trade_proposal(
         run_id=run_id,
         timestamp_utc=proposal_ts,
         spot_price=spot_price,
         yield_bias=yield_bias,
         risk_assessment=risk_assessment,
+        account_capital_usd=account_capital_usd,
+        risk_fraction=risk_fraction,
     )
 
     audit_entry = (

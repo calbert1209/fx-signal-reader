@@ -102,7 +102,7 @@ class TestBacktestSchemas(unittest.TestCase):
         self.assertIsNone(cfg.start_utc)
         self.assertIsNone(cfg.end_utc)
         self.assertEqual(cfg.step_hours, 4)
-        self.assertEqual(cfg.max_hold_hours, 72)
+        self.assertEqual(cfg.max_hold_hours, 120)
         self.assertEqual(cfg.spread_pips, 1.5)
         self.assertFalse(cfg.allow_overlapping_trades)
         self.assertTrue(cfg.conservative_tie_break)

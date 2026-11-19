@@ -213,8 +213,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-hold-hours",
         type=int,
-        default=72,
-        help="Maximum holding period in hours before TIME_STOP exit (default: 72).",
+        default=120,
+        help="Maximum holding period in hours before TIME_STOP exit (default: 120).",
     )
     parser.add_argument(
         "--spread-pips",

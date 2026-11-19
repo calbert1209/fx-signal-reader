@@ -122,11 +122,15 @@ class AgentState(TypedDict):
     reviewer_notes: str | None
     execution_receipt: dict[str, Any] | None
     audit_log: Annotated[list[str], operator.add]
+    account_capital_usd: float | None
+    risk_fraction: float | None
 
 
 def create_initial_state(
     run_id: str | None = None,
     timestamp_utc: str | None = None,
+    account_capital_usd: float | None = None,
+    risk_fraction: float | None = None,
 ) -> AgentState:
     """
     Create a normalized initial `AgentState` dictionary for a LangGraph pipeline run.
@@ -135,6 +139,8 @@ def create_initial_state(
         run_id: Optional run identifier; defaults to a generated UUIDv4 string.
         timestamp_utc: Optional run timestamp (normalized to strict ISO-8601 UTC via
             `normalizer.normalize_datetime_utc`); defaults to current UTC time.
+        account_capital_usd: Optional total account equity in USD (defaults to 10,000.0).
+        risk_fraction: Optional risk fraction per trade (defaults to 0.01 / 1.0%).
 
     Returns:
         Initialized `AgentState` dictionary with safe neutral defaults.
@@ -160,6 +166,8 @@ def create_initial_state(
         reviewer_notes=None,
         execution_receipt=None,
         audit_log=[],
+        account_capital_usd=10000.0 if account_capital_usd is None else float(account_capital_usd),
+        risk_fraction=0.01 if risk_fraction is None else float(risk_fraction),
     )
 
 

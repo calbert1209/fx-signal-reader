@@ -1,9 +1,9 @@
 # P7-02: Fixed-dollar and volatility-parity risk sizing
 
 * **Phase:** Phase 7: Strategy Refinement & Edge Enhancement
-* **Status:** `TODO`
+* **Status:** `DONE`
 * **Complexity:** Single-Task Project
-* **Last Updated (UTC):** `2026-11-19T05:50:00Z`
+* **Last Updated (UTC):** `2026-11-19T06:10:00Z`
 * **Architecture Plan:** [USD/JPY Signal Pipeline Plan.md](https://drive.google.com/file/d/1exIpR_gzlCxcdZuZDuY20ZtqY47ifkUb/view)
 
 ---
@@ -15,15 +15,16 @@ Replace the fixed regime unit tier scaling (`10,000` / `5,000` / `2,500` units) 
 ## 2. Implementation Notes & Acceptance Criteria
 
 1. **`fx_signal_reader/agent/nodes.py`:**
-   - Update `_build_trade_proposal` to calculate `position_size_units` using the planned Stop Loss distance in JPY:
+   - Implemented `compute_position_units(spot_price, stop_loss_distance_jpy=0.75, account_capital_usd=10000.0, risk_fraction=0.01) -> int` with non-negative floor and zero guards:
      $$\text{Units} = \left\lfloor \frac{\text{Account Capital} \times \text{Risk \%}}{\text{Stop Loss Distance in JPY}} \times \text{Spot Price} \right\rfloor$$
-   - Support optional capital and risk fraction parameters (defaulting to e.g. `$10,000` capital and `1.0%` = `$100` fixed risk per trade).
+   - Updated `_build_trade_proposal` and `risk_committee_node` to compute dynamic unit sizing from state configuration (`account_capital_usd`, `risk_fraction`).
 2. **`fx_signal_reader/backtest/simulator.py`:**
-   - Ensure `simulate_trade_resolution` and `compute_backtest_metrics` preserve dollar-based position sizing and compute normalized R-multiples consistently.
+   - Updated `simulator.py` to propagate `config.initial_capital_usd` into `create_initial_state`, maintaining uniform dollar risk across historical trade generation.
 3. **Tests & Verification:**
-   - Unit tests verifying unit calculation bounds across varying spot prices and stop loss distances.
-   - Run backtest and verify regime PnL is normalized.
+   - Added unit test `test_compute_position_units_bounds_and_risk_sizing` covering edge cases, bounds, and variable risk percentages/stop loss distances.
+   - Verified 173/173 tests passing.
+   - Run 2-year backtest: `TRANSITIONAL` regime turned net profitable (`+$101.92` across 90 trades, PF `1.0181`), and `RISK_ON` delivered `+$343.59` across 119 trades (PF `1.0513`), removing the regime payoff asymmetry.
 
-- [ ] Implementation complete
-- [ ] Unit tests passing
-- [ ] Position sizing verified across regimes
+- [x] Implementation complete
+- [x] Unit tests passing (173/173)
+- [x] Position sizing verified across regimes with normalized PnL

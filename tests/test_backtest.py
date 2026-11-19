@@ -70,7 +70,7 @@ def _build_replay_db(db_path: Path) -> Path:
         # - Nov 01 04:00Z: high=151.70 -> TP hit!
         # - Nov 02 00:00Z: Tier-4 MoF veto -> HOLD
         # - Nov 04 00:00Z: NEUTRAL spread -> HOLD
-        # - Nov 06 00:00Z: MoF headline >48h old, spread=0.50 (BEARISH_USD), VIX=27.0 (RISK_OFF -> 2500 units)
+        # - Nov 06 00:00Z: MoF headline >48h old, spread=0.50 (BEARISH_USD), VIX=21.0 (TRANSITIONAL -> equal-dollar sizing)
         #   entry ~151.50 (SELL, TP=150.00, SL=152.25)
         # - Nov 06 08:00Z: low=149.80 -> TP hit!
         jpy_bars = [
@@ -85,7 +85,7 @@ def _build_replay_db(db_path: Path) -> Path:
         ticks: list[tuple[str, str, float, float, float, float, float]] = []
         for ts, close, op, hi, lo in jpy_bars:
             ticks.append(("JPY=X", ts, close, op, hi, lo, 0.0))
-            vix = 27.0 if ts >= "2026-11-06T00:00:00Z" else 16.0
+            vix = 21.0 if ts >= "2026-11-06T00:00:00Z" else 16.0
             ticks.append(("^VIX", ts, vix, vix, vix + 0.1, vix - 0.1, 0.0))
             ticks.append(("^GSPC", ts, 7000.0, 6990.0, 7010.0, 6985.0, 1000.0))
             ticks.append(("^N225", ts, 50000.0, 49900.0, 50100.0, 49850.0, 0.0))
@@ -128,10 +128,10 @@ class TestRunBacktestIntegration(unittest.TestCase):
             self.assertEqual(report.metrics.win_rate_pct, 100.0)
             self.assertGreater(report.metrics.net_pnl_usd, 0.0)
             self.assertEqual(report.trades[0].action.value, "BUY")
-            self.assertEqual(report.trades[0].position_size_units, 10000)
+            self.assertEqual(report.trades[0].position_size_units, 20000)
             self.assertEqual(report.trades[0].exit_reason, ExitReason.TAKE_PROFIT)
             self.assertEqual(report.trades[1].action.value, "SELL")
-            self.assertEqual(report.trades[1].position_size_units, 2500)
+            self.assertEqual(report.trades[1].position_size_units, 20200)
             self.assertEqual(report.trades[1].exit_reason, ExitReason.TAKE_PROFIT)
             self.assertEqual(report.metrics.data_coverage["yield_spread_pct"], 100.0)
             self.assertEqual(report.metrics.data_coverage["vix_pct"], 100.0)

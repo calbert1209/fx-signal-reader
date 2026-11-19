@@ -176,7 +176,7 @@ class TestGraphApprovalGateAndExecution(unittest.TestCase):
         self.assertEqual(receipt.status, "EXECUTED")
         self.assertEqual(receipt.action, TradeAction.BUY)
         self.assertAlmostEqual(receipt.fill_price or 0.0, 152.00)
-        self.assertEqual(receipt.position_size_units, 10000)
+        self.assertEqual(receipt.position_size_units, 20266)
         self.assertEqual(receipt.approval_status, ApprovalStatus.APPROVED)
         validate_state_models(final_state)
 

@@ -711,7 +711,11 @@ def run_backtest(
         step_dt = _parse_utc_datetime_from_iso(step_ts)
         run_id = f"bt-{step_num:05d}"
 
-        initial_state = create_initial_state(run_id=run_id, timestamp_utc=step_ts)
+        initial_state = create_initial_state(
+            run_id=run_id,
+            timestamp_utc=step_ts,
+            account_capital_usd=effective_config.initial_capital_usd,
+        )
         final_state = graph.invoke(
             initial_state,
             config={"configurable": {"thread_id": run_id}},

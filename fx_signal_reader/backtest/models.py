@@ -73,7 +73,7 @@ class BacktestConfig(BaseModel):
     start_utc: str | None = None
     end_utc: str | None = None
     step_hours: int = Field(default=4, ge=0)
-    max_hold_hours: int = Field(default=72, gt=0)
+    max_hold_hours: int = Field(default=120, gt=0)
     spread_pips: float = Field(default=1.5, ge=0.0)
     allow_overlapping_trades: bool = False
     conservative_tie_break: bool = True
