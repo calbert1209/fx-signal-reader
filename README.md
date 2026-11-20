@@ -14,22 +14,34 @@ The system consists of four primary components:
    - `data/eurusd_signals.db`: Production database for EUR/USD.
    - `data/backtest_signals.db` / `data/backtest_signals_eurusd.db`: Isolated backtest and replay databases.
 3. **Specialist Agent Workflow:** A LangGraph multi-agent pipeline reads the active database through MCP tools, calculates directional yield bias, evaluates pair-specific risk regimes, and requests human approval before paper execution.
+   - **Advanced USD/JPY Multi-Signal Engine (Phase 9):**
+     - **P1 — 2-Year Sovereign Yield Spread (`US 2Y - JGB 2Y`):** Front-end monetary policy divergence (US 2Y Treasury via FRED `DGS2` / Yahoo `2YY=F` vs. Japan 2Y JGB `2年` from MoF `jgbcm.csv`). Confirms 10Y directional bias (`+0.05` confidence boost) or dampens confidence (`-0.05`) and flags curve divergence when the 2Y and 10Y spreads conflict.
+     - **P2 — Crude Oil (`CL=F`) Terms-of-Trade Momentum:** Symmetric energy terms-of-trade indicator evaluating 5-day and 20-day rate of change (RoC) and 50-day EMA on WTI Crude Oil Futures (`CL=F`). Classifies oil momentum into `SURGING` (energy import cost drag / JPY headwind / `BULLISH_USD`), `PLUNGING` (terms-of-trade relief / JPY supportive / `BEARISH_USD`), or `STABLE` (`NEUTRAL`).
+     - **P3 — Tokyo Gotobi & Nakane (9:55 AM JST) Fixing Session Engine:** Deterministic calendar and intraday session engine detecting Gotobi corporate settlement dates (days 5, 10, 15, 20, 25, 30, and month-end, with weekend/Japanese holiday rollback to the preceding business day). Applies a Pre-Fix (08:30–09:55 JST / 23:30–00:55 UTC) `BUY` conviction boost (`+0.05` confidence) and soft `SELL` advisory warning, plus Post-Fix (09:55–11:00 JST / 00:55–02:00 UTC) exhaustion notes.
    - **USD/JPY Risk Policy (`VERBAL_LADDER`):** Active 4-tier Japan Ministry of Finance (MoF) verbal intervention ladder, spot barrier proximity checks (157.0/158.5/160.0), and VIX filters.
    - **EUR/USD Risk Policy (`CENTRAL_BANK`):** $\pm 4$-hour Tier-1 Central Bank Event Blackout window (ECB rate decisions, FOMC, US NFP, US CPI), falling-knife momentum protection, and VIX $\ge 25.0$ risk-off veto.
    - **Position Sizing:** Equal-dollar risk sizing tailored to base-in-USD (USD/JPY) and quote-in-USD (EUR/USD) quote conventions.
-4. **Point-in-Time Backtest Simulator (`fx-backtest`):** Replays historical ticks with bracket resolution (fixed or dynamic ATR-14), breakeven stop loss ratcheting, and USD PnL accounting.
+4. **Point-in-Time Backtest Simulator (`fx-backtest`):** Replays historical ticks with bracket resolution (fixed or dynamic ATR-14), breakeven stop loss ratcheting, USD PnL accounting, and historical coverage diagnostics for 2Y yield spreads, crude oil, and Gotobi sessions.
 
 ### Tracked Data Sources
 
 | Data Type | Pair Coverage | Primary Source | Identifier / Symbols |
 | :--- | :--- | :--- | :--- |
-| **Spot & Risk Assets** | USD/JPY | Yahoo Finance | `JPY=X`, `^TNX`, `^GSPC`, `^N225`, `^VIX`, `GC=F` |
+| **Spot, Risk & Energy Assets** | USD/JPY | Yahoo Finance | `JPY=X`, `^TNX`, `2YY=F`, `^GSPC`, `^N225`, `^VIX`, `GC=F`, `CL=F` (Crude Oil WTI Futures) |
 | **Spot & Risk Assets** | EUR/USD | Yahoo Finance | `EURUSD=X`, `^TNX`, `^STOXX50E`, `^GSPC`, `^VIX`, `GC=F` |
-| **US 2Y & 10Y Yields** | Both | FRED API / Yahoo Finance | `DGS2`, `DGS10`, `^TNX` |
-| **Japan 10Y JGB Yield** | USD/JPY | Ministry of Finance Japan | `jgbcm.csv` |
+| **US 2Y & 10Y Yields** | Both | FRED API / Yahoo Finance | `DGS2`, `DGS10`, `2YY=F`, `^TNX` |
+| **Japan 2Y & 10Y JGB Yields** | USD/JPY | Ministry of Finance Japan | `jgbcm.csv` (`2年` 2Y JGB & `10年` 10Y JGB) |
 | **German 10Y Bund Yield** | EUR/USD | Deutsche Bundesbank / ECB / FRED | SDMX REST API, ECB Data Portal, FRED `IRLTLT01DEM156N` |
 | **Economic Calendar** | Both | Forex Factory | Weekly JSON feeds (USD, JPY, EUR events) |
 | **Policy News & Alerts** | Both | BoJ, MoF, ECB, FX RSS feeds | 10+ curated central bank and macro news feeds |
+
+### Database Schema (`schema.sql`)
+
+Each pair-segregated SQLite database (WAL mode) maintains four normalized tables:
+- `market_ticks`: Intraday and daily OHLCV bars (`symbol`, `timestamp_utc`, `price`, `open`, `high`, `low`, `volume`) covering spot FX, equity indices, VIX, Gold (`GC=F`), and WTI Crude Oil Futures (`CL=F`).
+- `yield_spreads`: Multi-tenor sovereign bond yields and differentials (`timestamp_utc`, `us_2y`, `jp_2y`, `spread_2y`, `us_10y`, `jp_10y`, `spread_10y`, `source`). Existing databases automatically migrate `jp_2y` and `spread_2y` columns via idempotent `ALTER TABLE` checks.
+- `macro_events`: Scheduled economic calendar releases with SHA-256 deduplication (`event_hash`, `timestamp_utc`, `currency`, `title`, `impact`, `forecast`, `previous`, `actual`).
+- `news_headlines`: Central bank and MoF/BoJ verbal intervention headlines (`url_hash`, `published_utc`, `source`, `title`, `url`, `matched_keywords`).
 
 ---
 
@@ -237,7 +249,7 @@ fx-signal-reader/
 │   └── cli/           # Entrypoints for fx-collect, fx-schedule, fx-pipeline, fx-backtest
 ├── data/              # Pair-segregated SQLite databases, fixtures, and trade ledgers
 ├── docs/              # Multi-pair expansion plan, task logs, and architecture specs
-├── tests/             # Comprehensive 288-test unit and integration test suite
+├── tests/             # Comprehensive 355-test unit and integration test suite
 ├── Dockerfile
 ├── docker-compose.yml
 └── pyproject.toml
@@ -253,4 +265,4 @@ Execute the full regression test suite:
 .venv/bin/pytest tests/
 ```
 
-Test coverage encompasses 288 tests covering pair profiles, yield ingestion, calendar parsing, agent nodes, simulator bracket resolution, CLI parameterization, and end-to-end replay backtests.
+Test coverage encompasses 355 tests covering pair profiles, 10Y/2Y yield ingestion and spread calculation, crude oil terms-of-trade momentum, Tokyo Gotobi & Nakane fixing session evaluation, calendar parsing, agent nodes, simulator bracket resolution, CLI parameterization, and end-to-end replay backtests.

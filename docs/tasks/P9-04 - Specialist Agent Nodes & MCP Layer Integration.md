@@ -1,9 +1,9 @@
 # P9-04: Specialist Agent Nodes & MCP Layer Integration
 
 * **Phase:** Phase 9: Advanced USD/JPY Signals (Yield Curve, Terms-of-Trade & Intraday Fix)
-* **Status:** `PENDING`
+* **Status:** `COMPLETED`
 * **Complexity:** Integration Task (Depends on P9-01, P9-02, P9-03)
-* **Last Updated (UTC):** `2026-11-20T13:35:00Z`
+* **Last Updated (UTC):** `2026-11-20T14:35:00Z`
 * **Implementation Plan:** [plan_p1_p2_p3_signals.md](file:///Users/albert/.gemini/antigravity/brain/df88ef12-66c7-48bc-a6ad-f98f47ed301e/plan_p1_p2_p3_signals.md)
 
 ---
@@ -37,7 +37,7 @@ Synthesize the 3 new signals into the LangGraph specialist agent workflow (`macr
    - MCP tools return enriched payloads while remaining backward-compatible with legacy consumers.
    - Graph execution tests pass with 100% deterministic state transitions.
 
-- [ ] `MacroAssessment` state model updated
-- [ ] 2Y confirmation, symmetric oil bias, and Gotobi rules implemented in `nodes.py`
-- [ ] MCP tools updated with new fields
-- [ ] Unit and graph execution tests written and passing
+- [x] `MacroAssessment` state model updated
+- [x] 2Y confirmation, symmetric oil bias, and Gotobi rules implemented in `nodes.py`
+- [x] MCP tools updated with new fields
+- [x] Unit and graph execution tests written and passing

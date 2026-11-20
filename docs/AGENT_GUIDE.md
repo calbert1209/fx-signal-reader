@@ -12,10 +12,11 @@ The package exposes a read-only Model Context Protocol (MCP) server over `stdio`
 
 | Tool Name | Key Parameters | Output / Purpose |
 | :--- | :--- | :--- |
-| `get_latest_yield_spread` | `spot_symbol="JPY=X"` or `"EURUSD=X"`, `as_of_utc=None` | Returns 10Y sovereign yield spread (`spread_10y`, `spread_bps`), 5d/20d momentum, and latest spot price (`spot_price`, `spot_symbol`). |
+| `get_latest_yield_spread` | `spot_symbol="JPY=X"` or `"EURUSD=X"`, `as_of_utc=None` | Returns 10Y and 2Y sovereign yield spreads (`us_10y`, `jp_10y`, `spread_10y`, `spread_bps`, `us_2y`, `jp_2y`, `spread_2y`, `us_2s10s_slope`), 5d/20d momentum, and latest spot price (`spot_price`, `spot_symbol`). |
 | `get_upcoming_macro_events` | `currency=None` (`USD`, `JPY`, `EUR`), `impact=None`, `limit=20`, `as_of_utc=None` | Returns scheduled economic calendar releases filtered by currency and impact. |
 | `get_recent_mof_alerts` | `min_tier=1`, `limit=10`, `as_of_utc=None` | Returns Japan MoF / BoJ verbal intervention headlines with tier scores (active for JPY pairs; returns empty/zero for EUR/USD). |
-| `get_market_ticks_summary` | `as_of_utc=None` | Returns latest prices and timestamps across spot FX, sovereign yield proxies (`^TNX`), equity benchmarks (`^GSPC`, `^N225`, `^STOXX50E`), VIX, and Gold. |
+| `get_market_ticks_summary` | `symbols=None`, `as_of_utc=None` | Returns latest OHLCV prices, bar changes, and timestamps across spot FX, sovereign yield proxies (`^TNX`), equity benchmarks (`^GSPC`, `^N225`, `^STOXX50E`), VIX, Gold (`GC=F`), WTI Crude Oil (`CL=F`), plus `gotobi_session` metadata. |
+| `get_market_trend_summary` | `symbol="JPY=X"`, `as_of_utc=None` | Returns rolling EMA-50, SMA-200, ATR-14, and trend status (`BULLISH`, `BEARISH`, `SIDEWAYS`). |
 
 ### MCP Host Configuration
 
@@ -75,7 +76,36 @@ events = call_namespaced_tool_sync(
     {"currency": "EUR", "impact": "High", "limit": 5},
 )
 print(f"Found {len(events)} high-impact EUR events.")
+
+# Query USD/JPY 10Y + 2Y yield spreads and market ticks (including CL=F and gotobi_session)
+jpy_spread = call_namespaced_tool_sync(
+    "usdjpy-signals:get_latest_yield_spread",
+    {"spot_symbol": "JPY=X"},
+)
+print("US-JP 10Y Spread:", jpy_spread["spread_10y"], "% | 2Y Spread:", jpy_spread["spread_2y"], "%")
+
+ticks_summary = call_namespaced_tool_sync(
+    "usdjpy-signals:get_market_ticks_summary",
+    {},
+)
+print("WTI Crude Oil (CL=F):", ticks_summary["symbols"].get("CL=F", {}).get("close"))
+print("Gotobi Session:", ticks_summary["gotobi_session"])
 ```
+
+### MCP Tool Payload Schemas (`get_latest_yield_spread` & `get_market_ticks_summary`)
+
+- **`get_latest_yield_spread` Return Fields:**
+  - `timestamp_utc`, `source`
+  - `us_10y`, `jp_10y`, `spread_10y`, `spread_bps`
+  - `us_2y`, `jp_2y`, `spread_2y`, `us_2s10s_slope`
+  - `spread_5d_change`, `spread_20d_change`, `momentum`
+  - `spot_price`, `spot_symbol`, `usdjpy_spot`, `usdjpy_timestamp_utc`
+- **`get_market_ticks_summary` Return Fields:**
+  - `as_of_utc`, `requested_symbols`, `symbol_count`, `missing_symbols`
+  - `symbols`: Mapping of symbol (`JPY=X`, `^TNX`, `^GSPC`, `^N225`, `^VIX`, `GC=F`, `CL=F`, etc.) to `{symbol, timestamp_utc, close, open, high, low, volume, prev_close, bar_change, bar_change_pct}`.
+  - `gotobi_session`: Dictionary produced by `evaluate_gotobi_session(as_of_utc)` containing `{timestamp_utc, jst_date, jst_time, is_gotobi_day, gotobi_reason, session_phase, is_pre_fix_window, is_post_fix_window, notes}`.
+- **Python Helper `get_commodity_momentum_summary(symbol="CL=F", db_path=None, as_of_utc=None)`:**
+  - Computes `{symbol, as_of_utc, current_price, price, roc_5d, roc_5d_pct, roc_20d, roc_20d_pct, ema_50, regime, bars_count}` where `regime` is `"SURGING"`, `"PLUNGING"`, or `"STABLE"`.
 
 ---
 
@@ -174,6 +204,25 @@ Universal `YieldBias` values:
 - `BEARISH`: Expects base currency depreciation (SELL).
 - `NEUTRAL`: No directional edge from yields (HOLD).
 - *Backward-compatible aliases:* `BULLISH_USD` (BUY on USD/JPY, SELL on EUR/USD) and `BEARISH_USD` (SELL on USD/JPY, BUY on EUR/USD).
+
+### Structured State Models (`MacroAssessment` & `TradeProposal`)
+
+#### `MacroAssessment` Fields (`fx_signal_reader/agent/state.py`)
+- **10Y Yield & Momentum Fields:** `yield_bias`, `us_10y`, `jp_10y`, `spread_10y`, `spread_bps`, `spread_5d_change`, `spread_20d_change`, `spread_momentum`, `upcoming_high_impact_events`, `policy_divergence_summary`, `confidence` (`0.0` to `1.0`).
+- **2Y Sovereign Yield Spread Fields (P1):**
+  - `us_2y` (`float | None`): US 2-Year Treasury yield (%).
+  - `jp_2y` (`float | None`): Japan 2-Year JGB yield (%).
+  - `spread_2y` (`float | None`): 2-Year sovereign spread (`us_2y - jp_2y`, in percentage points). Confirms 10Y bias (`+0.05` confidence boost when `spread_2y > 2.0%` on bullish or `< 1.0%` on bearish) or applies curve divergence dampening (`-0.05` confidence when 2Y and 10Y spreads disagree).
+- **Crude Oil Terms-of-Trade Fields (P2):**
+  - `crude_oil_price` (`float | None`): Latest WTI Crude Oil (`CL=F`) price in USD.
+  - `crude_oil_5d_change_pct` (`float | None`): 5-day percentage rate of change in `CL=F`.
+  - `terms_of_trade_bias` (`str | None`): Symmetric energy terms-of-trade directional bias for Japan (`"BULLISH_USD"` when `CL=F` is `SURGING`, `"BEARISH_USD"` when `PLUNGING`, or `"NEUTRAL"` when `STABLE`).
+- **Tokyo Gotobi & Nakane Session Field (P3):**
+  - `gotobi_session` (`dict[str, Any] | None`): Evaluated Tokyo 9:55 AM JST fixing metadata (`is_gotobi_day`, `session_phase` in `{"PRE_FIX", "POST_FIX", "STANDARD"}`, `is_pre_fix_window`, `is_post_fix_window`, `gotobi_reason`, `notes`).
+
+#### `TradeProposal` Fields (`fx_signal_reader/agent/state.py`)
+- `proposal_id`, `timestamp_utc`, `pair`, `action` (`BUY`, `SELL`, `HOLD`), `entry_price`, `stop_loss`, `take_profit`, `risk_reward_ratio`, `position_size_units`, `rationale`, `macro_bias`, `risk_regime`, `intervention_risk_score`.
+- `confidence` (`float | None`, `0.0` to `1.0`): Composite conviction score propagated from `MacroAssessment.confidence` and modulated by the Risk Committee (e.g., `+0.05` conviction boost for `BUY` proposals during a Gotobi `PRE_FIX` window; soft advisory warning on `SELL` proposals during Gotobi `PRE_FIX`; exhaustion caution during `POST_FIX`).
 
 ### Pair-Aware Risk Committee Policies
 

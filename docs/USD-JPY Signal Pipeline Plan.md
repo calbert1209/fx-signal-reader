@@ -10,7 +10,9 @@ This document captures the design and implementation plan for an automated, loca
 Among major FX pairs, USD/JPY offers high liquidity, sustained directional trends, and strong activity across both the Tokyo and New York sessions. Rather than relying purely on intraday price patterns, USD/JPY is heavily driven by sovereign bond yields, central bank divergence, risk sentiment, and official intervention risks.
 
 ### Core Signals Tracked
-* **US–Japan Yield Spreads (Primary Engine):** US 2Y and 10Y Treasury yields relative to Japanese Government Bond (JGB) 10Y yields (`US 10Y - JGB 10Y`). Widening spreads drive carry-trade inflows (higher USD/JPY); narrowing spreads trigger carry unwinds.
+* **US–Japan Yield Spreads (Primary Engine — 10Y & 2Y):** US 2Y and 10Y Treasury yields relative to Japanese Government Bond (JGB) 2Y (`2年`) and 10Y (`10年`) yields (`US 10Y - JGB 10Y` and `US 2Y - JGB 2Y`). Widening spreads drive carry-trade inflows (higher USD/JPY); narrowing spreads trigger carry unwinds. The 2-Year sovereign spread provides front-end policy confirmation (`+0.05` confidence boost) or curve divergence dampening (`-0.05` confidence).
+* **Crude Oil (`CL=F`) Terms-of-Trade Momentum:** WTI Crude Oil Futures (`CL=F`) 5-day/20-day RoC and 50-day EMA modeling Japan's energy import balance (`SURGING` oil acts as an import cost drag / JPY headwind; `PLUNGING` oil acts as terms-of-trade relief / JPY supportive).
+* **Tokyo Gotobi & Nakane (09:55 JST) Fixing Session Engine:** Deterministic calendar detection of corporate settlement dates (days 5, 10, 15, 20, 25, 30, and month-end with weekend/holiday rollback to the preceding business day) and intraday Pre-Fix (08:30–09:55 JST) `BUY` conviction boosts and Post-Fix (09:55–11:00 JST) exhaustion alerts.
 * **Central Bank Policy & Tier-1 Macro Data:** FOMC decisions, US CPI, Non-Farm Payrolls (NFP), Bank of Japan (BoJ) meetings, Tokyo/National Core CPI, and annual Shunto wage data.
 * **MoF / BoJ Intervention Risk:** Escalating verbal intervention from Japan's Ministry of Finance (MoF) or BoJ rate checks near major psychological levels (e.g., 160.00), which can trigger sudden, multi-hundred-pip reversals.
 * **Global Risk Sentiment:** Correlations with US equities (S&P 500), Japanese equities (Nikkei 225), volatility (VIX), and Gold.
@@ -22,9 +24,9 @@ Among major FX pairs, USD/JPY offers high liquidity, sustained directional trend
 
 | Indicator | Free Data Source | Collection Method / Identifiers |
 | :--- | :--- | :--- |
-| **US 2Y & 10Y Yields** | FRED (Federal Reserve Economic Data) | FRED REST API (`DGS2`, `DGS10`) or Nasdaq Data Link API |
-| **JGB 10Y Yield** | Japan Ministry of Finance (MoF) / Yahoo Finance | MoF daily CSV (`mof.go.jp/jgbs/.../jgbcm.csv`) benchmark (Yahoo `^JB10YR` delisted) |
-| **USD/JPY & Risk Assets** | Yahoo Finance | `yfinance` (`JPY=X`, `^TNX`, `^GSPC`, `^N225`, `^VIX`, `GC=F`) |
+| **US 2Y & 10Y Yields** | FRED (Federal Reserve Economic Data) / Yahoo Finance | FRED REST API (`DGS2`, `DGS10`) with Yahoo Finance (`2YY=F`, `^TNX`) fallback |
+| **JGB 2Y & 10Y Yields** | Japan Ministry of Finance (MoF) | MoF daily CSV (`mof.go.jp/jgbs/.../jgbcm.csv`) multi-tenor benchmark (`2年` & `10年`) |
+| **USD/JPY, Risk & Energy Assets** | Yahoo Finance | `yfinance` (`JPY=X`, `^TNX`, `2YY=F`, `^GSPC`, `^N225`, `^VIX`, `GC=F`, `CL=F`) |
 | **Macro Economic Calendar** | Forex Factory | Weekly JSON/XML calendar feed (scheduled times, currency, impact, forecast, actual) |
 | **MoF / BoJ Intervention News** | Reuters / Nikkei Asia / BoJ / FT | RSS feeds parsed against verbal intervention keyword triggers |
 
@@ -94,15 +96,15 @@ The architecture is designed to run locally with minimal cloud dependencies, com
 - [x] **P9-01 (2Y Sovereign Yield Spread & Schema Migration):** Add `jp_2y` and `spread_2y` columns to `yield_spreads` with safe migration, extract 2Y JGB from MoF CSV, add Yahoo `2YY=F` fallback for US 2Y, and implement `compute_2y_yield_spread`. *(Parallel Track A)*
 - [x] **P9-02 (Crude Oil Terms-of-Trade Momentum & Ticker Ingestion):** Add `CL=F` (WTI crude) to `MarketTicksCollector` watchlist, implement `compute_commodity_momentum` (5d/20d RoC and EMA-50) in `core/indicators.py`, and store candles in `market_ticks`. *(Parallel Track B)*
 - [x] **P9-03 (Tokyo Gotobi & Nakane Fixing Intraday Session Engine):** Implement `core/gotobi.py` with Japanese holiday/weekend business day rollback, Gotobi settlement detection (5/10/15/20/25/30/EOM), and Pre-Fix/Post-Fix window evaluation. *(Parallel Track C)*
-- [ ] **P9-04 (Specialist Agent Nodes & MCP Layer Integration):** Integrate P1 (2Y spread confirmation/curve divergence), P2 (symmetric terms-of-trade oil bias), and P3 (Gotobi pre-fix conviction boost) into `MacroAssessment` and `TradeProposal` in `agent/nodes.py`, and expose via MCP server. *(Downstream Track D)*
-- [ ] **P9-05 (Historical Backfill & Backtest Simulator Integration):** Extend `fx-backtest --backfill` to fetch historical `CL=F` candles and 2Y sovereign yields (MoF 2Y and FRED/Yahoo 2Y), ensuring all 3 signals operate during historical replays. *(Downstream Track E)*
-- [ ] **P9-06 (Multi-Signal Documentation Overhaul & Verification):** Synchronize `README.md`, `AGENTS.md`, `docs/AGENT_GUIDE.md`, and `USD-JPY Signal Pipeline Plan.md` with the 3 new signals, verify full regression test suite (288+ tests), and validate CLI entrypoints. *(Final Track F)*
+- [x] **P9-04 (Specialist Agent Nodes & MCP Layer Integration):** Integrate P1 (2Y spread confirmation/curve divergence), P2 (symmetric terms-of-trade oil bias), and P3 (Gotobi pre-fix conviction boost) into `MacroAssessment` and `TradeProposal` in `agent/nodes.py`, and expose via MCP server. *(Downstream Track D)*
+- [x] **P9-05 (Historical Backfill & Backtest Simulator Integration):** Extend `fx-backtest --backfill` to fetch historical `CL=F` candles and 2Y sovereign yields (MoF 2Y and FRED/Yahoo 2Y), ensuring all 3 signals operate during historical replays. *(Downstream Track E)*
+- [x] **P9-06 (Multi-Signal Documentation Overhaul & Verification):** Synchronize `README.md`, `AGENTS.md`, `docs/AGENT_GUIDE.md`, and `USD-JPY Signal Pipeline Plan.md` with the 3 new signals, verify full regression test suite (355 tests), and validate CLI entrypoints. *(Final Track F)*
 
 ---
 
 ## 5. Current Implementation Status
 
-* **Phase 1 (Data Sources):** FRED (`DGS2`/`DGS10`), Yahoo Finance (`JPY=X`, `^TNX`, `^GSPC`, `^N225`, `^VIX`, `GC=F`) + Japan MoF CSV JGB 10Y benchmark (`mof.go.jp`), Forex Factory calendar JSON/cache, and 10 curated intervention RSS wires.
+* **Phase 1 (Data Sources):** FRED (`DGS2`/`DGS10`), Yahoo Finance (`JPY=X`, `^TNX`, `2YY=F`, `^GSPC`, `^N225`, `^VIX`, `GC=F`, `CL=F`) + Japan MoF CSV JGB 2Y (`2年`) & 10Y (`10年`) benchmarks (`mof.go.jp`), Forex Factory calendar JSON/cache, and 10 curated intervention RSS wires.
 * **Phase 2 (Collection & Containerization):** WAL-mode SQLite schema (`schema.sql`), modular collectors (`collectors/`), ISO-8601 UTC normalization & spread engine (`normalizer.py`, `spread_calculator.py`), tiered session-aware scheduler (`scheduler.py`), and `Dockerfile` / `docker-compose.yml`.
 * **Phase 3 (MCP & LangGraph Agents):** Read-only SQLite MCP server (`mcp_server.py`), dual-server stdio MCP client (`mcp_client.py`, `mcp_servers.json`), typed LangGraph state & specialist nodes (`agent/state.py`, `agent/nodes.py`), and `interrupt_before` human approval gate + paper execution (`agent/graph.py`, `run_pipeline.py`).
-* **Phase 9 (Advanced USD/JPY Signals):** Registered in Google Drive Task Tracker (`P9-01` through `P9-06`). Parallel execution tracks defined for 2Y Yield Curve, Crude Oil Terms of Trade, and Tokyo Gotobi Fix.
+* **Phase 9 (Advanced USD/JPY Signals):** Completed across tasks `P9-01` through `P9-06` — integrating 2Y Sovereign Yield Spread (`spread_2y`), Crude Oil (`CL=F`) Terms-of-Trade Momentum, and the Tokyo Gotobi & Nakane (9:55 AM JST) Fixing Intraday Session Engine across live collection, specialist agent nodes, MCP server tools, historical backtesting, and documentation (355/355 tests passing).
