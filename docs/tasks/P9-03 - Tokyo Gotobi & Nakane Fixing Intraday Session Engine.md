@@ -1,9 +1,9 @@
 # P9-03: Tokyo Gotobi & Nakane Fixing Intraday Session Engine
 
 * **Phase:** Phase 9: Advanced USD/JPY Signals (Yield Curve, Terms-of-Trade & Intraday Fix)
-* **Status:** `PENDING`
+* **Status:** `COMPLETED`
 * **Complexity:** Single-Task Foundation
-* **Last Updated (UTC):** `2026-11-20T13:35:00Z`
+* **Last Updated (UTC):** `2026-11-20T13:56:00Z`
 * **Implementation Plan:** [plan_p1_p2_p3_signals.md](file:///Users/albert/.gemini/antigravity/brain/df88ef12-66c7-48bc-a6ad-f98f47ed301e/plan_p1_p2_p3_signals.md)
 
 ---
@@ -33,6 +33,6 @@ Create a deterministic, calendar-accurate intraday session engine in `fx_signal_
    - Pure Python implementation with zero mandatory third-party network dependencies.
    - High test coverage across historical dates and boundary minutes.
 
-- [ ] `core/gotobi.py` created with Japanese calendar rollback logic
-- [ ] Pre-Fix and Post-Fix intraday window detection implemented
-- [ ] Comprehensive unit tests created in `tests/test_gotobi.py`
+- [x] `core/gotobi.py` created with Japanese calendar rollback logic
+- [x] Pre-Fix and Post-Fix intraday window detection implemented
+- [x] Comprehensive unit tests created in `tests/test_gotobi.py`
