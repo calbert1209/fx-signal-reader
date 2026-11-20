@@ -119,7 +119,7 @@ def format_backtest_summary(
             f"spread={cfg.spread_pips} pips | overlap={cfg.allow_overlapping_trades} | "
             f"conservative_tie={cfg.conservative_tie_break} | mof_lookback={cfg.mof_lookback_hours}h"
         ),
-        f"Strategy           : regimes={regimes_str} | brackets={bracket_str} | breakeven={be_str}",
+        f"Strategy           : regimes={regimes_str} | risk={cfg.risk_fraction * 100:.1f}% | brackets={bracket_str} | breakeven={be_str}",
     ]
 
     if backfill_summary is not None:
@@ -275,6 +275,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Initial portfolio capital in USD (default: 10000.0).",
     )
     parser.add_argument(
+        "--risk-pct",
+        type=float,
+        default=None,
+        help="Account risk percentage per trade (e.g. 2.0 for 2.0%; default: 1.0%).",
+    )
+    parser.add_argument(
         "--allowed-regimes",
         type=str,
         default="RISK_ON,TRANSITIONAL",
@@ -358,6 +364,8 @@ def main(argv: list[str] | None = None) -> int:
         config_kwargs["sl_pips"] = args.sl_pips
     if args.tp_pips is not None:
         config_kwargs["tp_pips"] = args.tp_pips
+    if args.risk_pct is not None:
+        config_kwargs["risk_fraction"] = args.risk_pct / 100.0
 
     config = BacktestConfig(**config_kwargs)
     report = run_backtest(db_path=target_db, config=config)

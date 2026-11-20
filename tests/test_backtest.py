@@ -318,7 +318,7 @@ class TestBacktestCLI(unittest.TestCase):
                 )
             self.assertEqual(rc, 0)
             text_out = stdout_buf.getvalue()
-            self.assertIn("Strategy           : regimes=RISK_ON | brackets=fixed (SL=60.0p, TP=120.0p) | breakeven=+1.25R", text_out)
+            self.assertIn("Strategy           : regimes=RISK_ON | risk=1.0% | brackets=fixed (SL=60.0p, TP=120.0p) | breakeven=+1.25R", text_out)
 
             stdout_json = io.StringIO()
             with contextlib.redirect_stdout(stdout_json):
@@ -330,6 +330,8 @@ class TestBacktestCLI(unittest.TestCase):
                         "4",
                         "--allowed-regimes",
                         "RISK_ON,TRANSITIONAL",
+                        "--risk-pct",
+                        "2.5",
                         "--no-breakeven",
                         "--use-atr",
                         "--json",
@@ -340,6 +342,7 @@ class TestBacktestCLI(unittest.TestCase):
             self.assertIsNone(payload["config"]["breakeven_trigger_r"])
             self.assertTrue(payload["config"]["use_atr"])
             self.assertEqual(payload["config"]["allowed_regimes"], ["RISK_ON", "TRANSITIONAL"])
+            self.assertAlmostEqual(payload["config"]["risk_fraction"], 0.025)
 
             # Verify pipeline CLI parser accepts the matching P7-06 strategy flags
             from fx_signal_reader.cli import pipeline as pipeline_cli

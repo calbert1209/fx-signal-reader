@@ -770,6 +770,7 @@ def run_backtest(
             timestamp_utc=step_ts,
             pair=effective_config.pair,
             account_capital_usd=effective_config.initial_capital_usd,
+            risk_fraction=effective_config.risk_fraction,
             sl_pips=effective_config.sl_pips,
             tp_pips=effective_config.tp_pips,
             use_atr=effective_config.use_atr,

@@ -81,6 +81,7 @@ class BacktestConfig(BaseModel):
     conservative_tie_break: bool = True
     mof_lookback_hours: int = Field(default=48, ge=0)
     initial_capital_usd: float = Field(default=10000.0, gt=0.0)
+    risk_fraction: float = Field(default=0.01, gt=0.0, le=1.0)
     breakeven_trigger_r: float | None = Field(default=None, gt=0.0)
     sl_pips: float = Field(default=75.0, gt=0.0)
     tp_pips: float = Field(default=150.0, gt=0.0)
