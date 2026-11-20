@@ -26,12 +26,15 @@ from mcp.types import ToolAnnotations
 from fx_signal_reader.collectors.market_ticks import MarketTicksCollector
 from fx_signal_reader.collectors.news_rss import NewsRSSCollector
 from fx_signal_reader.core import DEFAULT_DB_PATH, PROJECT_ROOT
+from fx_signal_reader.core.gotobi import evaluate_gotobi_session
 from fx_signal_reader.core.indicators import (
     DEFAULT_ATR_PERIOD,
+    DEFAULT_COMMODITY_ROC_PERIOD,
     DEFAULT_EMA_PERIOD,
     DEFAULT_SMA_PERIOD,
     classify_market_trend,
     classify_spread_momentum,
+    compute_commodity_momentum,
     compute_latest_atr,
     compute_latest_ema,
     compute_latest_sma,
@@ -39,6 +42,7 @@ from fx_signal_reader.core.indicators import (
 )
 from fx_signal_reader.core.normalizer import normalize_datetime_utc
 from fx_signal_reader.core.spread_calculator import (
+    compute_2y_yield_spread,
     compute_spread_bps,
     compute_us_2s10s_slope,
     compute_yield_spread,
@@ -120,10 +124,20 @@ def get_latest_yield_spread(
     clean_spot_sym = (spot_symbol or "").strip() or "JPY=X"
     conn = get_readonly_connection(db_path)
     try:
+        col_info = conn.execute("PRAGMA table_info(yield_spreads);").fetchall()
+        col_names = {col["name"] for col in col_info}
+        has_2y_cols = "jp_2y" in col_names and "spread_2y" in col_names
+
+        columns_to_select = (
+            "timestamp_utc, us_2y, jp_2y, spread_2y, us_10y, jp_10y, spread_10y, source"
+            if has_2y_cols
+            else "timestamp_utc, us_2y, us_10y, jp_10y, spread_10y, source"
+        )
+
         if normalized_as_of is not None:
             spread_rows = conn.execute(
-                """
-                SELECT timestamp_utc, us_2y, us_10y, jp_10y, spread_10y, source
+                f"""
+                SELECT {columns_to_select}
                 FROM yield_spreads
                 WHERE timestamp_utc <= ?
                 ORDER BY timestamp_utc DESC
@@ -155,8 +169,8 @@ def get_latest_yield_spread(
                 ).fetchone()
         else:
             spread_rows = conn.execute(
-                """
-                SELECT timestamp_utc, us_2y, us_10y, jp_10y, spread_10y, source
+                f"""
+                SELECT {columns_to_select}
                 FROM yield_spreads
                 ORDER BY timestamp_utc DESC
                 LIMIT 21
@@ -188,6 +202,11 @@ def get_latest_yield_spread(
 
     spread_row = spread_rows[0] if spread_rows else None
     us_2y = spread_row["us_2y"] if spread_row else None
+    jp_2y = spread_row["jp_2y"] if (spread_row and "jp_2y" in spread_row.keys()) else None
+    spread_2y = spread_row["spread_2y"] if (spread_row and "spread_2y" in spread_row.keys()) else None
+    if spread_2y is None and us_2y is not None and jp_2y is not None:
+        spread_2y = compute_2y_yield_spread(us_2y, jp_2y)
+
     us_10y = spread_row["us_10y"] if spread_row else None
     jp_10y = spread_row["jp_10y"] if spread_row else None
     spread_10y = spread_row["spread_10y"] if spread_row else None
@@ -214,6 +233,8 @@ def get_latest_yield_spread(
     return {
         "timestamp_utc": spread_row["timestamp_utc"] if spread_row else None,
         "us_2y": us_2y,
+        "jp_2y": jp_2y,
+        "spread_2y": spread_2y,
         "us_10y": us_10y,
         "jp_10y": jp_10y,
         "spread_10y": spread_10y,
@@ -464,12 +485,20 @@ def get_market_ticks_summary(
     finally:
         conn.close()
 
+    gotobi_reference_ts = (
+        normalized_as_of
+        if normalized_as_of is not None
+        else (latest_overall_ts if latest_overall_ts is not None else None)
+    )
+    gotobi_session = evaluate_gotobi_session(gotobi_reference_ts).to_dict()
+
     return {
         "as_of_utc": latest_overall_ts,
         "requested_symbols": target_symbols,
         "symbol_count": len(ticks_by_symbol),
         "symbols": ticks_by_symbol,
         "missing_symbols": missing_symbols,
+        "gotobi_session": gotobi_session,
     }
 
 
@@ -553,6 +582,72 @@ def get_market_trend_summary(
         "sma_200": sma_200,
         "atr_14": atr_14,
         "trend": trend,
+        "bars_count": len(prices),
+    }
+
+
+def get_commodity_momentum_summary(
+    symbol: str = "CL=F",
+    db_path: str | None = None,
+    as_of_utc: str | None = None,
+    period: int = DEFAULT_COMMODITY_ROC_PERIOD,
+) -> dict[str, Any]:
+    """
+    Compute rolling commodity momentum and terms-of-trade regime for symbol (default CL=F).
+
+    Fetches price history up to `as_of_utc` and computes:
+      - current_price
+      - 5-day and 20-day percentage rate-of-change (roc_5d, roc_20d)
+      - 50-day EMA
+      - Terms-of-trade regime: SURGING, PLUNGING, or STABLE
+    """
+    normalized_as_of = _normalize_as_of_utc(as_of_utc)
+    clean_sym = (symbol or "").strip() or "CL=F"
+    validated_period = _validate_positive_int(period, "period")
+    fetch_limit = 250
+
+    conn = get_readonly_connection(db_path)
+    try:
+        if normalized_as_of is not None:
+            rows = conn.execute(
+                """
+                SELECT timestamp_utc, price
+                FROM market_ticks
+                WHERE symbol = ? AND timestamp_utc <= ?
+                ORDER BY timestamp_utc DESC
+                LIMIT ?
+                """,
+                (clean_sym, normalized_as_of, fetch_limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT timestamp_utc, price
+                FROM market_ticks
+                WHERE symbol = ?
+                ORDER BY timestamp_utc DESC
+                LIMIT ?
+                """,
+                (clean_sym, fetch_limit),
+            ).fetchall()
+    finally:
+        conn.close()
+
+    chronological_rows = list(reversed(rows))
+    prices = [float(r["price"]) for r in chronological_rows if r["price"] is not None]
+    mom = compute_commodity_momentum(prices, period=validated_period)
+
+    return {
+        "symbol": clean_sym,
+        "as_of_utc": normalized_as_of if normalized_as_of is not None else (rows[0]["timestamp_utc"] if rows else None),
+        "current_price": mom["current_price"],
+        "price": mom["current_price"],
+        "roc_5d": mom["roc_5d"],
+        "roc_5d_pct": mom["roc_5d_pct"],
+        "roc_20d": mom["roc_20d"],
+        "roc_20d_pct": mom["roc_20d_pct"],
+        "ema_50": mom["ema_50"],
+        "regime": mom["regime"],
         "bars_count": len(prices),
     }
 

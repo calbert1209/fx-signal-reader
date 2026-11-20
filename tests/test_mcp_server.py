@@ -32,6 +32,7 @@ import fx_signal_reader.mcp.server as mcp_server
 from fx_signal_reader.mcp.server import (
     CORE_TICKER_SYMBOLS,
     DEFAULT_DB_PATH,
+    get_commodity_momentum_summary,
     get_latest_yield_spread,
     get_market_ticks_summary,
     get_readonly_connection,
@@ -228,6 +229,27 @@ class TestDomainToolsWithTempDB(unittest.TestCase):
         self.assertEqual(res["source"], "yfinance+mof_japan+fred")
         self.assertAlmostEqual(res["usdjpy_spot"], 159.45)
         self.assertEqual(res["usdjpy_timestamp_utc"], "2026-11-18T09:00:00Z")
+        self.assertIn("spread_2y", res)
+        self.assertIn("jp_2y", res)
+
+    def test_get_latest_yield_spread_with_2y_data(self) -> None:
+        db_2y = Path(self._tmpdir.name) / "db_2y.db"
+        conn = sqlite3.connect(db_2y)
+        conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+        conn.execute(
+            """
+            INSERT INTO yield_spreads (timestamp_utc, us_2y, jp_2y, spread_2y, us_10y, jp_10y, spread_10y, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("2026-11-19T08:00:00Z", 4.50, 0.85, 3.65, 5.00, 1.50, 3.50, "mof_multi"),
+        )
+        conn.commit()
+        conn.close()
+
+        res = get_latest_yield_spread(db_path=str(db_2y))
+        self.assertAlmostEqual(res["us_2y"], 4.50)
+        self.assertAlmostEqual(res["jp_2y"], 0.85)
+        self.assertAlmostEqual(res["spread_2y"], 3.65)
 
     def test_get_latest_yield_spread_empty_db(self) -> None:
         empty_db = Path(self._tmpdir.name) / "empty.db"
@@ -301,6 +323,17 @@ class TestDomainToolsWithTempDB(unittest.TestCase):
         self.assertEqual(subset["symbol_count"], 1)
         self.assertEqual(subset["missing_symbols"], ["DOES_NOT_EXIST"])
         self.assertAlmostEqual(subset["symbols"]["^TNX"]["bar_change"], 0.02)
+
+        # Gotobi session payload
+        self.assertIn("gotobi_session", summary)
+        self.assertIn("is_gotobi_day", summary["gotobi_session"])
+        self.assertIn("session_phase", summary["gotobi_session"])
+
+    def test_get_commodity_momentum_summary(self) -> None:
+        comm = get_commodity_momentum_summary(symbol="CL=F", db_path=str(self.db_path))
+        self.assertEqual(comm["symbol"], "CL=F")
+        self.assertAlmostEqual(comm["current_price"], 71.50)
+        self.assertIn(comm["regime"], ("SURGING", "PLUNGING", "STABLE"))
 
 
 class TestDomainToolsWithLiveDB(unittest.TestCase):

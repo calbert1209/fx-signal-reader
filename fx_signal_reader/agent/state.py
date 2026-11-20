@@ -63,6 +63,13 @@ class MacroAssessment(BaseModel):
     upcoming_high_impact_events: list[dict[str, Any]] = Field(default_factory=list)
     policy_divergence_summary: str
     confidence: float = Field(ge=0.0, le=1.0)
+    us_2y: float | None = None
+    jp_2y: float | None = None
+    spread_2y: float | None = None
+    crude_oil_price: float | None = None
+    crude_oil_5d_change_pct: float | None = None
+    terms_of_trade_bias: str | None = None
+    gotobi_session: dict[str, Any] | None = None
 
 
 class RiskRegime(str, Enum):
@@ -135,6 +142,7 @@ class TradeProposal(BaseModel):
     macro_bias: YieldBias
     risk_regime: RiskRegime
     intervention_risk_score: float = Field(ge=0.0, le=100.0)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class AgentState(TypedDict):

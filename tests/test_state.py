@@ -190,6 +190,42 @@ class TestPydanticValidationAndBounds(unittest.TestCase):
         with self.assertRaises(ValidationError):
             MacroAssessment.model_validate(_sample_macro_payload(yield_bias="INVALID_BIAS"))
 
+    def test_macro_assessment_phase9_fields(self):
+        gotobi_session_payload = {
+            "is_gotobi_day": True,
+            "session_phase": "PRE_FIX",
+            "is_pre_fix_window": True,
+            "is_post_fix_window": False,
+            "is_gotobi_pre_fix": True,
+            "description": "Gotobi Pre-Fix accumulation window",
+        }
+        assessment = MacroAssessment.model_validate(
+            _sample_macro_payload(
+                us_2y=4.50,
+                jp_2y=0.85,
+                spread_2y=3.65,
+                crude_oil_price=72.50,
+                crude_oil_5d_change_pct=4.25,
+                terms_of_trade_bias="BULLISH_USD",
+                gotobi_session=gotobi_session_payload,
+            )
+        )
+        self.assertEqual(assessment.us_2y, 4.50)
+        self.assertEqual(assessment.jp_2y, 0.85)
+        self.assertEqual(assessment.spread_2y, 3.65)
+        self.assertEqual(assessment.crude_oil_price, 72.50)
+        self.assertEqual(assessment.crude_oil_5d_change_pct, 4.25)
+        self.assertEqual(assessment.terms_of_trade_bias, "BULLISH_USD")
+        self.assertEqual(assessment.gotobi_session, gotobi_session_payload)
+
+        # JSON round-trip
+        data = assessment.model_dump(mode="json")
+        self.assertEqual(data["spread_2y"], 3.65)
+        self.assertEqual(data["terms_of_trade_bias"], "BULLISH_USD")
+        self.assertTrue(data["gotobi_session"]["is_gotobi_pre_fix"])
+        reloaded = MacroAssessment.model_validate(data)
+        self.assertEqual(reloaded.spread_2y, 3.65)
+
     def test_risk_assessment_valid_and_defaults(self):
         minimal = RiskAssessment(
             risk_regime=RiskRegime.TRANSITIONAL,
@@ -264,6 +300,21 @@ class TestPydanticValidationAndBounds(unittest.TestCase):
 
         with self.assertRaises(ValidationError):
             TradeProposal.model_validate(_sample_proposal_payload(position_size_units=-100))
+
+    def test_trade_proposal_confidence_field_and_bounds(self):
+        # Default is None
+        p_default = TradeProposal.model_validate(_sample_proposal_payload())
+        self.assertIsNone(p_default.confidence)
+
+        # Valid values
+        for val in (0.0, 0.5, 0.75, 1.0):
+            p = TradeProposal.model_validate(_sample_proposal_payload(confidence=val))
+            self.assertEqual(p.confidence, val)
+
+        # Invalid bounds
+        for inv in (-0.05, 1.05, -1.0, 2.0):
+            with self.assertRaises(ValidationError):
+                TradeProposal.model_validate(_sample_proposal_payload(confidence=inv))
 
     def test_enum_json_serialization(self):
         macro = MacroAssessment.model_validate(_sample_macro_payload())
