@@ -31,6 +31,13 @@ from fx_signal_reader.agent.state import (
     YieldBias,
     validate_state_models,
 )
+from fx_signal_reader.core.gotobi import (
+    PHASE_POST_FIX,
+    PHASE_PRE_FIX,
+    PHASE_STANDARD,
+    evaluate_gotobi_session,
+)
+from fx_signal_reader.core.indicators import compute_commodity_momentum
 from fx_signal_reader.core.normalizer import normalize_datetime_utc
 from fx_signal_reader.core.pair_profile import (
     DEFAULT_PAIR,
@@ -38,7 +45,9 @@ from fx_signal_reader.core.pair_profile import (
     RiskPolicyType,
     get_pair_profile,
 )
+from fx_signal_reader.core.spread_calculator import compute_2y_yield_spread
 from fx_signal_reader.mcp.server import (
+    get_commodity_momentum_summary,
     get_latest_yield_spread,
     get_market_ticks_summary,
     get_market_trend_summary,
@@ -355,6 +364,14 @@ def _format_macro_summary(
     spread_momentum: str | None = None,
     downgraded_from_bullish: bool = False,
     profile: PairProfile | None = None,
+    spread_2y: float | None = None,
+    bias_2y: YieldBias | None = None,
+    curve_divergence: bool = False,
+    spread_2y_confirmed: bool = False,
+    crude_oil_price: float | None = None,
+    crude_oil_5d_change_pct: float | None = None,
+    terms_of_trade_bias: str | None = None,
+    gotobi_info: Any | None = None,
 ) -> str:
     """Build a concise human-readable macro policy divergence summary."""
     p_name = profile.pair if profile is not None else DEFAULT_PAIR
@@ -382,6 +399,19 @@ def _format_macro_summary(
                 f"{pair_label} 10Y spread at {spread_10y:.3f}% ({bps_text}; "
                 f"{base_lbl}={us_text}, {quote_lbl}={jp_text}){momentum_note} implies {yield_bias.value}."
             )
+
+    if spread_2y_confirmed and spread_2y is not None:
+        spread_desc += f" 2Y spread ({spread_2y:.3f}%) confirms 10Y {yield_bias.value} bias (+0.05 confidence boost)."
+    elif curve_divergence and spread_2y is not None:
+        bias_2y_str = bias_2y.value if bias_2y else "opposing"
+        spread_desc += f" Curve divergence / policy conflict: 10Y implies {yield_bias.value} but 2Y spread ({spread_2y:.3f}%) implies {bias_2y_str} (confidence moderated)."
+
+    if terms_of_trade_bias and terms_of_trade_bias != "NEUTRAL":
+        oil_chg_str = f"{crude_oil_5d_change_pct:+.2f}%" if crude_oil_5d_change_pct is not None else "n/a"
+        spread_desc += f" Terms of trade ({oil_chg_str} 5d oil): {terms_of_trade_bias}."
+
+    if gotobi_info is not None and getattr(gotobi_info, "is_gotobi_day", False):
+        spread_desc += f" Tokyo Fix: {gotobi_info.description}"
 
     if near_catalysts:
         titles = ", ".join(str(ev.get("title", "Unnamed")) for ev in near_catalysts[:3])
@@ -494,12 +524,56 @@ def macro_analyst_node(
     )
     yield_bias = YieldBias.NEUTRAL if downgraded_from_bullish else raw_yield_bias
 
+    us_2y = _safe_float(spread_snapshot.get("us_2y"))
+    jp_2y = _safe_float(spread_snapshot.get("jp_2y"))
+    spread_2y = _safe_float(spread_snapshot.get("spread_2y"))
+    if spread_2y is None and us_2y is not None and jp_2y is not None:
+        spread_2y = compute_2y_yield_spread(us_2y, jp_2y)
+
+    bias_2y = _evaluate_yield_bias(spread_2y, profile=profile) if spread_2y is not None else None
+    curve_divergence = False
+    spread_2y_confirmed = False
+
+    if bias_2y is not None and yield_bias != YieldBias.NEUTRAL:
+        if bias_2y == yield_bias:
+            spread_2y_confirmed = True
+        elif bias_2y != YieldBias.NEUTRAL:
+            curve_divergence = True
+
     confidence = _compute_macro_confidence(
         spread_10y=spread_10y,
         yield_bias=yield_bias,
         near_catalyst_count=len(near_catalysts),
         profile=profile,
     )
+
+    if spread_2y_confirmed:
+        confidence = round(min(1.0, confidence + 0.05), 4)
+    elif curve_divergence:
+        confidence = round(max(0.05, confidence - 0.05), 4)
+
+    # Query 'CL=F' prices from market_ticks, compute 5d RoC with compute_commodity_momentum
+    oil_summary = get_commodity_momentum_summary(
+        symbol="CL=F",
+        db_path=db_path,
+        as_of_utc=as_of_utc,
+        period=5,
+    )
+    crude_oil_price = _safe_float(oil_summary.get("current_price"))
+    crude_oil_5d_change_pct = _safe_float(oil_summary.get("roc_5d"))
+    oil_regime = str(oil_summary.get("regime") or "STABLE")
+
+    if oil_regime == "SURGING":
+        terms_of_trade_bias = "BULLISH_USD"
+    elif oil_regime == "PLUNGING":
+        terms_of_trade_bias = "BEARISH_USD"
+    else:
+        terms_of_trade_bias = "NEUTRAL"
+
+    # Evaluate Gotobi session
+    gotobi_info = evaluate_gotobi_session(reference_ts_utc)
+    gotobi_session = gotobi_info.to_dict()
+
     summary = _format_macro_summary(
         yield_bias=yield_bias,
         us_10y=us_10y,
@@ -511,6 +585,14 @@ def macro_analyst_node(
         spread_momentum=spread_momentum,
         downgraded_from_bullish=downgraded_from_bullish,
         profile=profile,
+        spread_2y=spread_2y,
+        bias_2y=bias_2y,
+        curve_divergence=curve_divergence,
+        spread_2y_confirmed=spread_2y_confirmed,
+        crude_oil_price=crude_oil_price,
+        crude_oil_5d_change_pct=crude_oil_5d_change_pct,
+        terms_of_trade_bias=terms_of_trade_bias,
+        gotobi_info=gotobi_info,
     )
 
     assessment = MacroAssessment(
@@ -525,12 +607,22 @@ def macro_analyst_node(
         upcoming_high_impact_events=high_impact_events,
         policy_divergence_summary=summary,
         confidence=confidence,
+        us_2y=us_2y,
+        jp_2y=jp_2y,
+        spread_2y=spread_2y,
+        crude_oil_price=crude_oil_price,
+        crude_oil_5d_change_pct=crude_oil_5d_change_pct,
+        terms_of_trade_bias=terms_of_trade_bias,
+        gotobi_session=gotobi_session,
     )
     assessment_json = assessment.model_dump(mode="json")
 
     audit_entry = (
         f"macro_analyst:yield_bias={assessment.yield_bias.value};"
         f"spread_10y={assessment.spread_10y};"
+        f"spread_2y={assessment.spread_2y};"
+        f"tot={assessment.terms_of_trade_bias};"
+        f"gotobi={gotobi_info.session_phase};"
         f"confidence={assessment.confidence:.4f};"
         f"high_impact_events={len(high_impact_events)};"
         f"near_catalysts={len(near_catalysts)}"
@@ -638,12 +730,22 @@ def _build_trade_proposal(
     risk_fraction: float = DEFAULT_RISK_FRACTION,
     stop_loss_distance_jpy: float = STOP_LOSS_DISTANCE_JPY,
     take_profit_distance_jpy: float = TAKE_PROFIT_DISTANCE_JPY,
+    gotobi_session: dict[str, Any] | None = None,
+    terms_of_trade_bias: str | None = None,
+    macro_confidence: float | None = None,
 ) -> tuple[TradeProposal, str]:
     """Synthesize a Pydantic-validated `TradeProposal` and initial `ApprovalStatus`."""
     profile = get_pair_profile(pair)
     proposal_id = f"prop-{run_id}"
     regime = risk_assessment.risk_regime
     score = risk_assessment.intervention_risk_score
+
+    is_gotobi_day = bool(gotobi_session.get("is_gotobi_day")) if gotobi_session else False
+    session_phase = str(gotobi_session.get("session_phase") or "STANDARD") if gotobi_session else "STANDARD"
+    is_pre_fix = bool(gotobi_session.get("is_pre_fix_window")) if gotobi_session else False
+    is_post_fix = bool(gotobi_session.get("is_post_fix_window")) if gotobi_session else False
+
+    prop_confidence = macro_confidence
 
     if risk_assessment.veto_trade or yield_bias == YieldBias.NEUTRAL or spot_price is None:
         reasons: list[str] = []
@@ -658,6 +760,15 @@ def _build_trade_proposal(
         if spot_price is None:
             reasons.append(f"{profile.pair} spot price unavailable")
 
+        hold_rationale = f"HOLD recommended: {'; '.join(reasons)}."
+        extra_hold_notes: list[str] = []
+        if gotobi_session:
+            extra_hold_notes.append(f"Gotobi phase: {session_phase} (Gotobi day={is_gotobi_day})")
+        if terms_of_trade_bias:
+            extra_hold_notes.append(f"Terms of trade: {terms_of_trade_bias}")
+        if extra_hold_notes:
+            hold_rationale += f" [{'; '.join(extra_hold_notes)}.]"
+
         proposal = TradeProposal(
             proposal_id=proposal_id,
             timestamp_utc=timestamp_utc,
@@ -667,10 +778,11 @@ def _build_trade_proposal(
             take_profit=None,
             risk_reward_ratio=None,
             position_size_units=0,
-            rationale=f"HOLD recommended: {'; '.join(reasons)}.",
+            rationale=hold_rationale,
             macro_bias=yield_bias,
             risk_regime=regime,
             intervention_risk_score=score,
+            confidence=prop_confidence,
         )
         return proposal, ApprovalStatus.NOT_REQUIRED.value
 
@@ -702,6 +814,24 @@ def _build_trade_proposal(
         f"and manageable intervention risk ({score:.2f}/100)."
     )
 
+    extra_notes: list[str] = []
+    if is_gotobi_day and is_pre_fix:
+        if action == TradeAction.BUY:
+            if prop_confidence is not None:
+                prop_confidence = round(min(1.0, prop_confidence + 0.05), 4)
+            extra_notes.append("Gotobi Pre-Fix window: commercial USD buying flow boosts BUY conviction (+0.05 confidence)")
+        elif action == TradeAction.SELL:
+            extra_notes.append("Gotobi Pre-Fix advisory: commercial USD demand creates counter-trend risk; proceeding with caution without hard veto")
+    elif is_post_fix:
+        extra_notes.append("Post-Fix window caution: potential Tokyo fixing exhaustion; caution against chasing fresh highs")
+
+    extra_notes.append(f"Gotobi phase: {session_phase} (Gotobi day={is_gotobi_day})")
+    if terms_of_trade_bias:
+        extra_notes.append(f"Terms of trade: {terms_of_trade_bias}")
+
+    if extra_notes:
+        rationale += f" [{'; '.join(extra_notes)}.]"
+
     proposal = TradeProposal(
         proposal_id=proposal_id,
         timestamp_utc=timestamp_utc,
@@ -715,6 +845,7 @@ def _build_trade_proposal(
         macro_bias=yield_bias,
         risk_regime=regime,
         intervention_risk_score=score,
+        confidence=prop_confidence,
     )
     return proposal, ApprovalStatus.PENDING.value
 
@@ -931,6 +1062,13 @@ def risk_committee_node(
         sl_pips=_safe_float(state.get("sl_pips")),
         tp_pips=_safe_float(state.get("tp_pips")),
     )
+    macro_assessment_dict = state.get("macro_assessment") or {}
+    gotobi_session = macro_assessment_dict.get("gotobi_session")
+    if gotobi_session is None:
+        gotobi_session = evaluate_gotobi_session(proposal_ts).to_dict()
+    terms_of_trade_bias = macro_assessment_dict.get("terms_of_trade_bias")
+    macro_conf = _safe_float(macro_assessment_dict.get("confidence"))
+
     trade_proposal, approval_status = _build_trade_proposal(
         run_id=run_id,
         timestamp_utc=proposal_ts,
@@ -942,8 +1080,12 @@ def risk_committee_node(
         risk_fraction=risk_fraction,
         stop_loss_distance_jpy=sl_dist,
         take_profit_distance_jpy=tp_dist,
+        gotobi_session=gotobi_session,
+        terms_of_trade_bias=terms_of_trade_bias,
+        macro_confidence=macro_conf,
     )
 
+    gotobi_phase_tag = str(gotobi_session.get("session_phase") or "STANDARD") if gotobi_session else "STANDARD"
     audit_entry = (
         f"risk_committee:regime={risk_assessment.risk_regime.value};"
         f"intervention_score={risk_assessment.intervention_risk_score:.2f};"
@@ -951,6 +1093,8 @@ def risk_committee_node(
         f"highest_tier={risk_assessment.highest_mof_tier};"
         f"veto={risk_assessment.veto_trade};"
         f"action={trade_proposal.action.value};"
+        f"gotobi={gotobi_phase_tag};"
+        f"tot={terms_of_trade_bias};"
         f"approval={approval_status}"
     )
 

@@ -67,7 +67,7 @@ def _build_two_node_graph(db_path: str | None = None):
 def _create_fixture_db(
     db_file: Path,
     *,
-    yield_row: tuple[str, float | None, float | None, float | None, float | None, str] | None = None,
+    yield_row: tuple[Any, ...] | None = None,
     ticks: list[tuple[str, str, float, float | None, float | None, float | None, float | None]] | None = None,
     events: list[tuple[str, str, str, str, str, str | None, str | None, str | None]] | None = None,
     headlines: list[tuple[str, str, str, str, str, str]] | None = None,
@@ -77,13 +77,22 @@ def _create_fixture_db(
     try:
         conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
         if yield_row is not None:
-            conn.execute(
-                """
-                INSERT INTO yield_spreads (timestamp_utc, us_2y, us_10y, jp_10y, spread_10y, source)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                yield_row,
-            )
+            if len(yield_row) == 8:
+                conn.execute(
+                    """
+                    INSERT INTO yield_spreads (timestamp_utc, us_2y, jp_2y, spread_2y, us_10y, jp_10y, spread_10y, source)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    yield_row,
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO yield_spreads (timestamp_utc, us_2y, us_10y, jp_10y, spread_10y, source)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    yield_row,
+                )
         if ticks:
             conn.executemany(
                 """
@@ -475,6 +484,144 @@ class TestSpecialistNodesScenarios(unittest.TestCase):
                 state = create_initial_state(timestamp_utc="2026-11-18T09:00:00Z")
                 out = risk_committee_node(state, db_path=str(db_path))
                 self.assertAlmostEqual(out["intervention_risk_score"], expected_score, places=2)
+
+
+class TestPhase9SpecialistNodeSignals(unittest.TestCase):
+    """Test 2Y confirmation/divergence, crude oil terms-of-trade, and Tokyo Gotobi modulation."""
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.temp_dir = Path(self._tmpdir.name)
+
+    def tearDown(self) -> None:
+        self._tmpdir.cleanup()
+
+    def test_2y_spread_confirms_10y_boosts_confidence(self) -> None:
+        # Baseline: only 10Y (spread 2.40% -> BULLISH_USD, no 2Y data)
+        db_base = _create_fixture_db(
+            self.temp_dir / "base.db",
+            yield_row=("2026-11-18T08:45:00Z", None, 5.20, 2.80, 2.40, "fixture"),
+            ticks=_standard_ticks(spot=152.00, vix=15.0),
+        )
+        state_base = create_initial_state(timestamp_utc="2026-11-18T09:00:00Z")
+        out_base = macro_analyst_node(state_base, db_path=str(db_base))
+        base_conf = out_base["macro_assessment"]["confidence"]
+
+        # Confirmed: 2Y spread is 3.50% (> 2.0 -> BULLISH_USD, confirms 10Y)
+        db_confirmed = _create_fixture_db(
+            self.temp_dir / "confirmed.db",
+            yield_row=("2026-11-18T08:45:00Z", 4.50, 1.00, 3.50, 5.20, 2.80, 2.40, "fixture"),
+            ticks=_standard_ticks(spot=152.00, vix=15.0),
+        )
+        state_conf = create_initial_state(timestamp_utc="2026-11-18T09:00:00Z")
+        out_conf = macro_analyst_node(state_conf, db_path=str(db_confirmed))
+        conf = out_conf["macro_assessment"]["confidence"]
+        self.assertAlmostEqual(conf, round(min(1.0, base_conf + 0.05), 4))
+        self.assertEqual(out_conf["macro_assessment"]["spread_2y"], 3.50)
+        self.assertIn("confirms 10Y BULLISH", out_conf["macro_assessment"]["policy_divergence_summary"])
+
+    def test_2y_spread_divergence_moderates_confidence(self) -> None:
+        # 10Y is 2.40% (BULLISH_USD) but 2Y is 0.50% (< 1.0 -> BEARISH_USD: curve inversion / divergence)
+        db_div = _create_fixture_db(
+            self.temp_dir / "diverged.db",
+            yield_row=("2026-11-18T08:45:00Z", 1.50, 1.00, 0.50, 5.20, 2.80, 2.40, "fixture"),
+            ticks=_standard_ticks(spot=152.00, vix=15.0),
+        )
+        # Compare with baseline without 2Y
+        db_base = _create_fixture_db(
+            self.temp_dir / "base2.db",
+            yield_row=("2026-11-18T08:45:00Z", None, 5.20, 2.80, 2.40, "fixture"),
+            ticks=_standard_ticks(spot=152.00, vix=15.0),
+        )
+        out_base = macro_analyst_node(create_initial_state(timestamp_utc="2026-11-18T09:00:00Z"), db_path=str(db_base))
+        base_conf = out_base["macro_assessment"]["confidence"]
+
+        out_div = macro_analyst_node(create_initial_state(timestamp_utc="2026-11-18T09:00:00Z"), db_path=str(db_div))
+        div_conf = out_div["macro_assessment"]["confidence"]
+        self.assertAlmostEqual(div_conf, round(max(0.05, base_conf - 0.05), 4))
+        self.assertIn("Curve divergence / policy conflict", out_div["macro_assessment"]["policy_divergence_summary"])
+
+    def test_crude_oil_momentum_terms_of_trade_bias(self) -> None:
+        # Surging oil: 6 bars rising from 70.0 to 75.0 (+7.14% > +3.0%)
+        surging_oil_ticks = [
+            ("CL=F", f"2026-11-1{i}T09:00:00Z", 70.0 + i, 70.0, 71.0 + i, 69.5, 1000.0)
+            for i in range(6)
+        ]
+        ticks = _standard_ticks(spot=152.00, vix=15.0) + surging_oil_ticks
+        db_surge = _create_fixture_db(
+            self.temp_dir / "surge_oil.db",
+            yield_row=("2026-11-18T08:45:00Z", 4.80, 5.20, 2.80, 2.40, "fixture"),
+            ticks=ticks,
+        )
+        out = macro_analyst_node(create_initial_state(timestamp_utc="2026-11-18T09:00:00Z"), db_path=str(db_surge))
+        self.assertEqual(out["macro_assessment"]["terms_of_trade_bias"], "BULLISH_USD")
+        self.assertGreater(out["macro_assessment"]["crude_oil_5d_change_pct"], 3.0)
+
+        # Plunging oil: 6 bars dropping from 75.0 to 68.0 (-9.33% < -3.0%)
+        plunging_oil_ticks = [
+            ("CL=F", f"2026-11-1{i}T09:00:00Z", 75.0 - i * 1.4, 75.0, 76.0, 67.0, 1000.0)
+            for i in range(6)
+        ]
+        ticks_plunge = _standard_ticks(spot=152.00, vix=15.0) + plunging_oil_ticks
+        db_plunge = _create_fixture_db(
+            self.temp_dir / "plunge_oil.db",
+            yield_row=("2026-11-18T08:45:00Z", 4.80, 5.20, 2.80, 2.40, "fixture"),
+            ticks=ticks_plunge,
+        )
+        out_p = macro_analyst_node(create_initial_state(timestamp_utc="2026-11-18T09:00:00Z"), db_path=str(db_plunge))
+        self.assertEqual(out_p["macro_assessment"]["terms_of_trade_bias"], "BEARISH_USD")
+
+    def test_gotobi_pre_fix_buy_conviction_boost(self) -> None:
+        # 2026-11-20 is a Friday Gotobi day (day 20).
+        # 00:15 UTC is 09:15 JST -> PRE_FIX window (08:30-09:55 JST).
+        db_path = _create_fixture_db(
+            self.temp_dir / "gotobi_buy.db",
+            yield_row=("2026-11-20T00:00:00Z", 4.80, 5.20, 2.80, 2.40, "fixture"),
+            ticks=_standard_ticks(spot=152.00, vix=15.0),
+        )
+        graph = _build_two_node_graph(str(db_path))
+        state = create_initial_state(run_id="gotobi-buy-001", timestamp_utc="2026-11-20T00:15:00Z")
+        final = graph.invoke(state)
+
+        proposal = final["trade_proposal"]
+        self.assertEqual(proposal["action"], "BUY")
+        self.assertIn("Gotobi Pre-Fix window", proposal["rationale"])
+        self.assertIn("commercial USD buying flow boosts BUY conviction", proposal["rationale"])
+        macro_conf = final["macro_assessment"]["confidence"]
+        self.assertAlmostEqual(proposal["confidence"], round(min(1.0, macro_conf + 0.05), 4))
+
+    def test_gotobi_pre_fix_sell_soft_advisory_warning_no_hard_veto(self) -> None:
+        # 2026-11-20T00:15:00Z on Gotobi day with BEARISH macro spread (0.60%)
+        db_path = _create_fixture_db(
+            self.temp_dir / "gotobi_sell.db",
+            yield_row=("2026-11-20T00:00:00Z", 3.00, 3.10, 2.50, 0.60, "fixture"),
+            ticks=_standard_ticks(spot=145.00, vix=17.0),
+        )
+        graph = _build_two_node_graph(str(db_path))
+        state = create_initial_state(run_id="gotobi-sell-001", timestamp_utc="2026-11-20T00:15:00Z")
+        final = graph.invoke(state)
+
+        proposal = final["trade_proposal"]
+        # NOT vetoed to HOLD!
+        self.assertEqual(proposal["action"], "SELL")
+        self.assertEqual(final["approval_status"], "PENDING")
+        self.assertIn("Gotobi Pre-Fix advisory", proposal["rationale"])
+        self.assertIn("counter-trend risk", proposal["rationale"])
+
+    def test_gotobi_post_fix_exhaustion_caution(self) -> None:
+        # 2026-11-20T01:15:00Z is 10:15 JST -> POST_FIX window (09:55-11:00 JST).
+        db_path = _create_fixture_db(
+            self.temp_dir / "gotobi_postfix.db",
+            yield_row=("2026-11-20T01:00:00Z", 4.80, 5.20, 2.80, 2.40, "fixture"),
+            ticks=_standard_ticks(spot=152.00, vix=15.0),
+        )
+        graph = _build_two_node_graph(str(db_path))
+        state = create_initial_state(run_id="gotobi-postfix-001", timestamp_utc="2026-11-20T01:15:00Z")
+        final = graph.invoke(state)
+
+        proposal = final["trade_proposal"]
+        self.assertIn("Post-Fix window caution", proposal["rationale"])
+        self.assertIn("caution against chasing fresh highs", proposal["rationale"])
 
 
 class TestLiveDatabaseIntegration(unittest.TestCase):

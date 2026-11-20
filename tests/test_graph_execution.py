@@ -35,6 +35,7 @@ from fx_signal_reader.agent.graph import (
 )
 from fx_signal_reader.agent.state import (
     ApprovalStatus,
+    MacroAssessment,
     TradeAction,
     create_initial_state,
     validate_state_models,
@@ -243,6 +244,76 @@ class TestGraphApprovalGateAndExecution(unittest.TestCase):
         self.assertEqual(receipt.status, "SKIPPED_HOLD")
         self.assertEqual(receipt.position_size_units, 0)
         self.assertFalse(self.ledger_path.exists())
+
+    def test_graph_execution_with_phase9_signals(self) -> None:
+        """Verify full graph execution properly threads 2Y spread, oil terms-of-trade, and Gotobi session."""
+        db_file = self._tmpdir / "phase9_graph.db"
+        conn = sqlite3.connect(db_file)
+        conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+        conn.execute(
+            """
+            INSERT INTO yield_spreads (timestamp_utc, us_2y, jp_2y, spread_2y, us_10y, jp_10y, spread_10y, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("2026-11-20T00:00:00Z", 4.50, 1.00, 3.50, 5.20, 2.80, 2.40, "fixture_p9"),
+        )
+        ticks = [
+            ("JPY=X", "2026-11-20T00:15:00Z", 152.00, 151.90, 152.10, 151.85, 0.0),
+            ("^TNX", "2026-11-20T00:15:00Z", 5.20, 5.18, 5.22, 5.18, 0.0),
+            ("^VIX", "2026-11-20T00:15:00Z", 15.0, 15.2, 15.3, 14.9, 0.0),
+            ("^GSPC", "2026-11-20T00:15:00Z", 7400.0, 7380.0, 7410.0, 7375.0, 1000000.0),
+            ("^N225", "2026-11-20T00:15:00Z", 59500.0, 59400.0, 59600.0, 59350.0, 0.0),
+            ("GC=F", "2026-11-20T00:15:00Z", 3750.0, 3745.0, 3755.0, 3740.0, 500.0),
+        ]
+        for i in range(6):
+            ticks.append(("CL=F", f"2026-11-1{i}T00:15:00Z", 70.0 + i, 70.0, 71.0 + i, 69.5, 1000.0))
+        conn.executemany(
+            """
+            INSERT INTO market_ticks (symbol, timestamp_utc, price, open, high, low, volume)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            ticks,
+        )
+        conn.commit()
+        conn.close()
+
+        graph = build_signal_graph(
+            db_path=str(db_file),
+            ledger_path=self.ledger_path,
+            interrupt_on_actionable=True,
+        )
+        config = {"configurable": {"thread_id": "thread-p9-graph"}}
+        initial = create_initial_state(run_id="run-p9-graph", timestamp_utc="2026-11-20T00:15:00Z")
+
+        paused_state = graph.invoke(initial, config=config)
+        snapshot = graph.get_state(config)
+        self.assertEqual(snapshot.next, ("paper_execution",))
+
+        # Check macro assessment phase 9 fields
+        macro = paused_state["macro_assessment"]
+        self.assertEqual(macro["spread_2y"], 3.50)
+        self.assertEqual(macro["terms_of_trade_bias"], "BULLISH_USD")
+        self.assertIsNotNone(macro["gotobi_session"])
+        self.assertEqual(macro["gotobi_session"]["session_phase"], "PRE_FIX")
+        self.assertTrue(macro["gotobi_session"]["is_gotobi_pre_fix"])
+
+        # Check trade proposal phase 9 fields & Gotobi conviction boost
+        proposal = paused_state["trade_proposal"]
+        self.assertEqual(proposal["action"], "BUY")
+        self.assertIn("Gotobi Pre-Fix window", proposal["rationale"])
+        self.assertIn("Terms of trade: BULLISH_USD", proposal["rationale"])
+        self.assertGreaterEqual(proposal["confidence"], macro["confidence"])
+
+        # Resume with approval
+        final_state = resume_with_decision(
+            graph,
+            config,
+            approved=True,
+            reviewer_notes="Approved Gotobi Pre-Fix buy with 2Y confirmation.",
+        )
+        validate_state_models(final_state)
+        receipt = ExecutionReceipt.model_validate(final_state["execution_receipt"])
+        self.assertEqual(receipt.status, "EXECUTED")
 
     @unittest.skipUnless(LIVE_DB_PATH.exists(), "Live usdjpy_signals.db not present")
     def test_live_database_end_to_end_graph_execution(self) -> None:
