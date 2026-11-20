@@ -368,6 +368,8 @@ All tasks across Waves 0 through 3 have been completed and merged into `main`:
 | **P8-06** | Backtest Simulator Pip Scaling & USD PnL | `fx_signal_reader/backtest/models.py`, `backtest/simulator.py`, `backtest/backfill.py` | `186d43f` |
 | **P8-07** | CLI Entrypoints & Multi-Pair Parameterization | `fx_signal_reader/cli/collect.py`, `pipeline.py`, `schedule.py`, `backtest.py`, `test_cli_pairs.py` | `6df673b` |
 | **P8-08** | Multi-Pair Test Suite & Verification | `tests/test_backtest_pairs.py` (288 tests passing) | `9a15e34` |
+| **P8-09** | Documentation Multi-Pair Generalization | `README.md`, `docs/AGENT_GUIDE.md`, `pyproject.toml` | `3b0a7b7` |
+| **P8-10** | EUR/USD Yield Spread Threshold Recalibration | `fx_signal_reader/core/pair_profile.py`, `tests/` | PENDING |
 
 ### Empirical 2-Year EUR/USD Backtest Verification (2024–2026)
 - **Period**: 2024-11-20 to 2026-11-19 (12,337 hourly bars, step=4h, fixed 50p SL / 100p TP, breakeven=+1.25R, RISK_ON filter).
