@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS market_ticks (
 CREATE TABLE IF NOT EXISTS yield_spreads (
     timestamp_utc TEXT PRIMARY KEY,
     us_2y REAL,
+    jp_2y REAL,
+    spread_2y REAL,
     us_10y REAL,
     jp_10y REAL,
     spread_10y REAL, -- us_10y - jp_10y

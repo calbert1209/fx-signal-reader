@@ -31,6 +31,7 @@ from fx_signal_reader.core.pair_profile import (
     get_pair_profile,
 )
 from fx_signal_reader.core.spread_calculator import (
+    compute_2y_yield_spread,
     compute_pair_spread,
     parse_de_bund_csv,
 )
@@ -139,6 +140,14 @@ class MarketTicksCollector(BaseCollector):
         date_str = last_row[0].strip()
         rate_10y = float(last_row[y10_idx].strip())
 
+        rate_2y: Optional[float] = None
+        if "2年" in header:
+            y2_idx = header.index("2年")
+            try:
+                rate_2y = float(last_row[y2_idx].strip())
+            except (ValueError, TypeError):
+                rate_2y = None
+
         # Parse Reiwa era date: R8.11.17 -> 2026-11-17T00:00:00Z
         iso_date = datetime.now(timezone.utc).strftime("%Y-%m-%dT00:00:00Z")
         m = re.match(r"R(\d+)\.(\d+)\.(\d+)", date_str)
@@ -149,15 +158,49 @@ class MarketTicksCollector(BaseCollector):
             day = int(m.group(3))
             iso_date = f"{gregorian_yr:04d}-{month:02d}-{day:02d}T00:00:00Z"
 
-        self.logger.info(
-            f"Successfully parsed MoF JGB 10Y: {rate_10y}% (date: {date_str} -> {iso_date})"
-        )
+        log_msg = f"Successfully parsed MoF JGB 10Y: {rate_10y}%"
+        if rate_2y is not None:
+            log_msg += f", 2Y: {rate_2y}%"
+        log_msg += f" (date: {date_str} -> {iso_date})"
+        self.logger.info(log_msg)
         return {
             "rate_10y": rate_10y,
+            "rate_2y": rate_2y,
             "raw_date": date_str,
             "timestamp_utc": iso_date,
             "source": "Japan Ministry of Finance (mof.go.jp)",
         }
+
+    def fetch_us_2y(
+        self, return_candles: bool = False
+    ) -> Tuple[Optional[float], Optional[str]] | Tuple[Optional[float], Optional[str], List[Dict[str, Any]]]:
+        """
+        Fetches the latest US 2-Year Treasury yield.
+        First attempts FRED DGS2 if configured. If unavailable or None, automatically
+        falls back to Yahoo Finance '2YY=F'.
+
+        Returns:
+            If return_candles is False: (rate, source_name)
+            If return_candles is True: (rate, source_name, candles_list)
+        """
+        if self.fred_api_key:
+            val = self.fetch_fred_latest("DGS2")
+            if val is not None:
+                self.logger.info(f"Fetched US 2Y yield from FRED DGS2: {val}%")
+                return (val, "fred", []) if return_candles else (val, "fred")
+
+        # Fallback to Yahoo Finance 2YY=F
+        try:
+            candles, _meta = self.fetch_ticker_data("2YY=F")
+            if candles:
+                latest = candles[-1]
+                val = float(latest["price"])
+                self.logger.info(f"Fetched US 2Y yield from Yahoo Finance 2YY=F: {val}%")
+                return (val, "yahoo_2yy", candles) if return_candles else (val, "yahoo_2yy")
+        except Exception as exc:
+            self.logger.warning(f"Yahoo 2YY=F fallback fetch failed: {exc}")
+
+        return (None, None, []) if return_candles else (None, None)
 
     def fetch_fred_latest(self, series_id: str) -> Optional[float]:
         """
@@ -430,10 +473,12 @@ class MarketTicksCollector(BaseCollector):
         is_jpy_pair = self.profile.pair == DEFAULT_PAIR
         foreign_10y: Optional[float] = None
         foreign_source = ""
+        jp_2y: Optional[float] = None
         if is_jpy_pair:
-            # 2. Fetch JGB 10Y yield from MoF Japan
+            # 2. Fetch JGB 10Y and 2Y yields from MoF Japan
             jgb_info = self.fetch_jgb_10y_from_mof()
             jp_10y = jgb_info["rate_10y"]
+            jp_2y = jgb_info.get("rate_2y")
             jgb_time = jgb_info["timestamp_utc"]
 
             # Insert JGB 10Y into market_ticks under both JGB10Y and ^JB10YR
@@ -457,6 +502,18 @@ class MarketTicksCollector(BaseCollector):
                     "volume": 0.0,
                 },
             ]
+            if jp_2y is not None:
+                jgb_ticks.append(
+                    {
+                        "symbol": "JGB2Y",
+                        "timestamp_utc": jgb_time,
+                        "price": jp_2y,
+                        "open": jp_2y,
+                        "high": jp_2y,
+                        "low": jp_2y,
+                        "volume": 0.0,
+                    }
+                )
             conn.executemany(
                 """
                 INSERT OR REPLACE INTO market_ticks
@@ -497,9 +554,25 @@ class MarketTicksCollector(BaseCollector):
             except Exception as exc:
                 self.logger.error(f"German 10Y Bund yield unavailable: {exc}")
 
-        # 3. Calculate and store the pair's 10Y yield spread (base - quote)
+        # 3. Calculate and store the pair's 10Y and 2Y yield spreads
         us_10y = latest_prices.get("^TNX")
-        us_2y = self.fetch_fred_latest("DGS2")
+        if is_jpy_pair:
+            us_2y, us_2y_src, us_2y_candles = self.fetch_us_2y(return_candles=True)
+            if us_2y_src == "yahoo_2yy" and us_2y_candles:
+                conn.executemany(
+                    """
+                    INSERT OR REPLACE INTO market_ticks
+                    (symbol, timestamp_utc, price, open, high, low, volume)
+                    VALUES (:symbol, :timestamp_utc, :price, :open, :high, :low, :volume)
+                    """,
+                    us_2y_candles,
+                )
+                total_ticks_inserted += len(us_2y_candles)
+                latest_prices["2YY=F"] = us_2y
+        else:
+            us_2y = self.fetch_fred_latest("DGS2")
+            us_2y_src = "fred" if us_2y is not None else None
+            us_2y_candles = []
 
         # Spread = base_yield - quote_yield. USD/JPY: US10Y - JGB10Y; EUR/USD: DE10Y - US10Y.
         spread_10y: Optional[float] = None
@@ -509,6 +582,11 @@ class MarketTicksCollector(BaseCollector):
             else:
                 spread_10y = compute_pair_spread(foreign_10y, us_10y)
 
+        # 2Y Spread: US 2Y - JP 2Y (for USD/JPY)
+        spread_2y: Optional[float] = None
+        if is_jpy_pair and us_2y is not None and jp_2y is not None:
+            spread_2y = compute_2y_yield_spread(us_2y, jp_2y)
+
         # Deterministic timestamp for yield spread: latest timestamp of ^TNX or spot
         spread_timestamp = (
             latest_timestamps.get("^TNX")
@@ -517,23 +595,21 @@ class MarketTicksCollector(BaseCollector):
         )
 
         foreign_label = "mof_japan" if is_jpy_pair else "bundesbank_de10y"
-        source_label = (
-            f"yfinance+{foreign_label}+fred"
-            if us_2y is not None
-            else f"yfinance+{foreign_label}"
-        )
+        if us_2y_src == "fred":
+            source_label = f"yfinance+{foreign_label}+fred"
+        elif us_2y_src == "yahoo_2yy":
+            source_label = f"yfinance+{foreign_label}+yahoo_2y"
+        else:
+            source_label = f"yfinance+{foreign_label}"
 
-        # NOTE (schema compatibility): the yield_spreads columns keep their legacy
-        # names. `jp_10y` is the pair's "foreign yield" column: JGB10Y for USD/JPY,
-        # DE10Y for EUR/USD. `us_10y` is always the US 10Y yield and `spread_10y`
-        # is base - quote (USD/JPY: US - JP; EUR/USD: DE10Y - US10Y).
+        # Insert into yield_spreads table with 2Y sovereign yields
         conn.execute(
             """
             INSERT OR REPLACE INTO yield_spreads
-            (timestamp_utc, us_2y, us_10y, jp_10y, spread_10y, source)
-            VALUES (?, ?, ?, ?, ?, ?)
+            (timestamp_utc, us_2y, jp_2y, spread_2y, us_10y, jp_10y, spread_10y, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (spread_timestamp, us_2y, us_10y, foreign_10y, spread_10y, source_label),
+            (spread_timestamp, us_2y, jp_2y, spread_2y, us_10y, foreign_10y, spread_10y, source_label),
         )
         conn.commit()
 
@@ -556,6 +632,8 @@ class MarketTicksCollector(BaseCollector):
         }
         if is_jpy_pair:
             summary["jgb_10y"] = jp_10y
+            if jp_2y is not None:
+                summary["jgb_2y"] = jp_2y
         else:
             summary["pair"] = self.profile.pair
             summary["de_10y"] = foreign_10y
@@ -568,9 +646,16 @@ class MarketTicksCollector(BaseCollector):
                 "ticker_summaries": ticker_summaries,
             }
         )
+        if us_2y is not None:
+            summary["us_2y"] = us_2y
+        if spread_2y is not None:
+            summary["spread_2y"] = spread_2y
+
         foreign_name = "JP" if is_jpy_pair else "DE"
+        spread_msg = f"10Y Spread: {spread_10y}% (US: {us_10y}%, {foreign_name}: {foreign_10y}%)"
+        if spread_2y is not None:
+            spread_msg += f", 2Y Spread: {spread_2y}% (US: {us_2y}%, JP: {jp_2y}%)"
         self.logger.info(
-            f"Market ticks collection complete: {db_ticks_count} total ticks in DB, "
-            f"10Y Spread: {spread_10y}% (US: {us_10y}%, {foreign_name}: {foreign_10y}%)"
+            f"Market ticks collection complete: {db_ticks_count} total ticks in DB, {spread_msg}"
         )
         return summary

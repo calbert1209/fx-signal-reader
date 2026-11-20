@@ -342,5 +342,142 @@ class TestUsdJpyCollectUnchanged(unittest.TestCase):
             conn.close()
 
 
+class TestYieldSpread2YAndSchemaMigration(unittest.TestCase):
+    def test_schema_migration_adds_2y_columns(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "test_legacy.db"
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                """
+                CREATE TABLE yield_spreads (
+                    timestamp_utc TEXT PRIMARY KEY,
+                    us_2y REAL,
+                    us_10y REAL,
+                    jp_10y REAL,
+                    spread_10y REAL,
+                    source TEXT NOT NULL
+                );
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO yield_spreads (timestamp_utc, us_2y, us_10y, jp_10y, spread_10y, source)
+                VALUES ('2026-11-17T00:00:00Z', 4.30, 4.50, 1.60, 2.90, 'legacy')
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            # Now instantiate collector and get_connection (which triggers init_db)
+            collector = MarketTicksCollector(db_path=db_path)
+            conn = collector.get_connection()
+
+            cur = conn.cursor()
+            cur.execute("PRAGMA table_info(yield_spreads)")
+            cols = {r["name"] for r in cur.fetchall()}
+            self.assertIn("jp_2y", cols)
+            self.assertIn("spread_2y", cols)
+
+            # Preexisting row should be intact
+            row = conn.execute("SELECT * FROM yield_spreads WHERE timestamp_utc = '2026-11-17T00:00:00Z'").fetchone()
+            self.assertEqual(row["us_10y"], 4.50)
+            self.assertEqual(row["spread_10y"], 2.90)
+            self.assertIsNone(row["jp_2y"])
+            self.assertIsNone(row["spread_2y"])
+
+            # Idempotency: calling init_db again should not raise
+            collector.init_db(conn)
+            conn.close()
+
+    def test_fetch_jgb_10y_and_2y_from_mof(self):
+        mof_csv = (
+            "国債金利情報\n"
+            "基準日,1年,2年,5年,10年\n"
+            "R8.11.18,0.850,1.100,1.850,2.920\n"
+        )
+        c = MarketTicksCollector()
+        with patch.object(c, "fetch_url", return_value=_resp(mof_csv)):
+            res = c.fetch_jgb_10y_from_mof()
+        self.assertEqual(res["rate_10y"], 2.920)
+        self.assertEqual(res["rate_2y"], 1.100)
+        self.assertEqual(res["timestamp_utc"], "2026-11-18T00:00:00Z")
+
+    def test_fetch_us_2y_fred(self):
+        c = MarketTicksCollector(fred_api_key="mock_key")
+        with patch.object(c, "fetch_fred_latest", return_value=4.35):
+            val, src = c.fetch_us_2y()
+        self.assertEqual(val, 4.35)
+        self.assertEqual(src, "fred")
+
+    def test_fetch_us_2y_yahoo_fallback_unconfigured_fred(self):
+        c = MarketTicksCollector(fred_api_key="")
+        candles = [{"price": 4.25, "timestamp_utc": "2026-11-18T15:00:00Z"}]
+        with patch.object(c, "fetch_ticker_data", return_value=(candles, {})) as ft:
+            val, src = c.fetch_us_2y()
+        ft.assert_called_once_with("2YY=F")
+        self.assertEqual(val, 4.25)
+        self.assertEqual(src, "yahoo_2yy")
+
+    def test_fetch_us_2y_yahoo_fallback_fred_none(self):
+        c = MarketTicksCollector(fred_api_key="mock_key")
+        candles = [{"price": 4.28, "timestamp_utc": "2026-11-18T15:00:00Z"}]
+        with patch.object(c, "fetch_fred_latest", return_value=None), patch.object(
+            c, "fetch_ticker_data", return_value=(candles, {})
+        ) as ft:
+            val, src = c.fetch_us_2y()
+        ft.assert_called_once_with("2YY=F")
+        self.assertEqual(val, 4.28)
+        self.assertEqual(src, "yahoo_2yy")
+
+    def test_collect_with_2y_yields_end_to_end(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "test_collect_2y.db"
+            c = MarketTicksCollector(db_path=db, fred_api_key="")
+            prices = {s: 100.0 for s in MarketTicksCollector.TICKERS}
+            prices["^TNX"] = 4.50
+            prices["2YY=F"] = 4.35
+
+            def fake_ticker(s):
+                return _candles(s, prices.get(s, 100.0))
+
+            with patch.object(c, "fetch_ticker_data", side_effect=fake_ticker), patch.object(
+                c,
+                "fetch_jgb_10y_from_mof",
+                return_value={
+                    "rate_10y": 1.60,
+                    "rate_2y": 0.85,
+                    "raw_date": "R8.11.18",
+                    "timestamp_utc": "2026-11-18T00:00:00Z",
+                    "source": "mof",
+                },
+            ), patch.object(c, "fetch_de_10y_bund") as de:
+                summary = c.collect()
+
+            de.assert_not_called()
+            self.assertEqual(summary["status"], "SUCCESS")
+            self.assertEqual(summary["jgb_10y"], 1.60)
+            self.assertEqual(summary["jgb_2y"], 0.85)
+            self.assertEqual(summary["us_10y"], 4.50)
+            self.assertEqual(summary["us_2y"], 4.35)
+            self.assertEqual(summary["spread_10y"], 2.90)
+            self.assertEqual(summary["spread_2y"], 3.50)
+
+            conn = sqlite3.connect(db)
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM yield_spreads").fetchone()
+            self.assertAlmostEqual(row["us_2y"], 4.35)
+            self.assertAlmostEqual(row["jp_2y"], 0.85)
+            self.assertAlmostEqual(row["spread_2y"], 3.50)
+            self.assertAlmostEqual(row["us_10y"], 4.50)
+            self.assertAlmostEqual(row["jp_10y"], 1.60)
+            self.assertAlmostEqual(row["spread_10y"], 2.90)
+            self.assertIn("yahoo_2y", row["source"])
+
+            syms = {r[0] for r in conn.execute("SELECT DISTINCT symbol FROM market_ticks")}
+            self.assertIn("JGB2Y", syms)
+            self.assertIn("2YY=F", syms)
+            conn.close()
+
+
 if __name__ == "__main__":
     unittest.main()
