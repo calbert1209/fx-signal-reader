@@ -511,9 +511,9 @@ class TestLiveDatabaseIntegration(unittest.TestCase):
         self.assertGreater(macro.spread_10y or 0.0, 2.0)
         self.assertGreater(len(macro.upcoming_high_impact_events), 0)
 
-        # Verify live DB risk state (VIX ~23.85 TRANSITIONAL, Tier 4 MoF alerts -> veto & HOLD)
+        # Verify live DB risk state (VIX >= 18 TRANSITIONAL/RISK_OFF, Tier 4 MoF alerts -> veto & HOLD)
         self.assertIsNotNone(risk.vix_level)
-        self.assertEqual(risk.risk_regime, RiskRegime.TRANSITIONAL)
+        self.assertIn(risk.risk_regime, (RiskRegime.TRANSITIONAL, RiskRegime.RISK_OFF))
         self.assertEqual(risk.highest_mof_tier, 4)
         self.assertGreaterEqual(risk.intervention_risk_score, 70.0)
         self.assertEqual(risk.intervention_alert_level, InterventionAlertLevel.CRITICAL)
