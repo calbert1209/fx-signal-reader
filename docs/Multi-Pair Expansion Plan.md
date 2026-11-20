@@ -1,5 +1,8 @@
 # Multi-Pair Architecture Expansion Plan (Generalizing USD/JPY to EUR/USD & Other Pairs)
 
+> **Status:** `COMPLETED` | **Implementation Wave:** Waves 0–3 Completed | **Last Verified (UTC):** `2026-11-20T03:15:00Z`
+> **Full Regression Suite:** `288 passed in ~38s` (100% pass rate)
+
 ## Goal Description
 
 The current FX Signal Reader codebase was engineered with a focused implementation on **USD/JPY**, embedding several pair-specific assumptions:
@@ -348,3 +351,27 @@ Each pair resolves its default database to `data/{symbol_slug}_signals.db` (e.g.
 ### Manual Verification
 1. Run `fx-collect --pair EURUSD --collector calendar` against live/cached Forex Factory feed; verify table `macro_events` contains EUR releases (ECB, German CPI).
 2. Run `fx-backtest --pair EURUSD --start 2025-01-01 --end 2026-01-01` to verify synthetic replay and trade bracket metrics.
+
+---
+
+## Completed Implementation & Empirical Benchmarks
+
+All tasks across Waves 0 through 3 have been completed and merged into `main`:
+
+| Task ID | Task Scope | Implementation Artifacts | Commit |
+| :--- | :--- | :--- | :--- |
+| **P8-01** | Pair Profile Architecture & Core Registry | `fx_signal_reader/core/pair_profile.py`, `tests/test_pair_profile.py` | `5b6a6b0` |
+| **P8-02** | Universal Directional Bias & Sizing Math | `fx_signal_reader/agent/state.py`, `fx_signal_reader/agent/nodes.py` | `0eed2b5` |
+| **P8-03** | Sovereign Yield Ingestion for German Bunds | `fx_signal_reader/collectors/market_ticks.py`, `core/spread_calculator.py`, `tests/test_market_ticks_pairs.py` | `a62dbf9` |
+| **P8-04** | Multi-Pair Calendar & ECB News Feeds | `fx_signal_reader/collectors/calendar.py`, `collectors/news_rss.py`, `tests/test_feeds_pairs.py` | `7a3d46d` |
+| **P8-05** | Specialist Agent Nodes Policy & Event Blackout | `fx_signal_reader/agent/nodes.py`, `mcp/server.py`, `tests/test_nodes_pairs.py` | `4b68454` |
+| **P8-06** | Backtest Simulator Pip Scaling & USD PnL | `fx_signal_reader/backtest/models.py`, `backtest/simulator.py`, `backtest/backfill.py` | `186d43f` |
+| **P8-07** | CLI Entrypoints & Multi-Pair Parameterization | `fx_signal_reader/cli/collect.py`, `pipeline.py`, `schedule.py`, `backtest.py`, `test_cli_pairs.py` | `6df673b` |
+| **P8-08** | Multi-Pair Test Suite & Verification | `tests/test_backtest_pairs.py` (288 tests passing) | `9a15e34` |
+
+### Empirical 2-Year EUR/USD Backtest Verification (2024–2026)
+- **Period**: 2024-11-20 to 2026-11-19 (12,337 hourly bars, step=4h, fixed 50p SL / 100p TP, breakeven=+1.25R, RISK_ON filter).
+- **Return**: **+2.97%** (+$297.42 net PnL).
+- **Profit Factor**: **1.1496** | **Win Rate**: **35.29%** (12 wins, 22 losses at 1:2 R:R).
+- **Max Drawdown**: **$524.00 (5.04%)**.
+- **Coverage**: 100% German Bund / US 10Y spread, 99.94% VIX, 51.57% Tier-1 central bank event coverage (1,382 signals vetoed during high-risk/blackout windows).

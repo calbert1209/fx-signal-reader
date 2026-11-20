@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "fx-signal-reader"
 version = "0.1.0"
-description = "Automated USD/JPY signal pipeline with SQLite WAL persistence, MCP tools, and LangGraph multi-agent approval workflow."
+description = "Automated multi-pair FX signal pipeline (USD/JPY, EUR/USD) with SQLite WAL persistence, MCP tools, and LangGraph multi-agent approval workflow."
 requires-python = ">=3.11"
 dependencies = [
     "yfinance>=1.8.0",

@@ -1,5 +1,8 @@
 # USD/JPY Automated Signal Pipeline: Architecture & Task Breakdown
 
+> [!NOTE]
+> **Archival Architecture Reference**: This document captures the foundational Phase 1–7 architecture originally designed specifically for **USD/JPY**. In Phase 8, the system generalized to a multi-pair platform supporting both **USD/JPY** and **EUR/USD**. For current multi-pair architecture, registry profiles, and EUR/USD specifications, see [Multi-Pair Expansion Plan.md](Multi-Pair%20Expansion%20Plan.md) and [README.md](../README.md).
+
 ## 1. Session Background & Objective
 
 This document captures the design and implementation plan for an automated, local-first data pipeline to monitor and analyze **USD/JPY** trading signals using freely available data sources.

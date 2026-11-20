@@ -1,49 +1,54 @@
-# Agent Guide for USD/JPY Signal Reader
+# Agent Guide: Multi-Pair FX Signal Reader (USD/JPY & EUR/USD)
 
-This guide shows how to connect an AI agent to this package. It expands on [README.md](../README.md) with basic code examples.
+This guide explains how external AI agents and trading automation workflows connect to the `fx_signal_reader` package. It expands on [README.md](../README.md) with practical MCP tool schemas, Python API examples, and signal interpretation rules across both **USD/JPY** and **EUR/USD**.
 
 ---
 
 ## 1. Connect an External MCP Host
 
-The package includes a read-only MCP server over `stdio`. External AI hosts can call four tools to inspect market data.
+The package exposes a read-only Model Context Protocol (MCP) server over `stdio`. External AI hosts (such as Claude Desktop, Cursor, or custom agent runtimes) can invoke tools to inspect market data, sovereign yield spreads, macro events, and risk metrics.
 
-### Available Tools
+### Available MCP Tools
 
-| Tool Name | Purpose |
-| :--- | :--- |
-| `get_latest_yield_spread` | Return the latest 10Y yield spread and USD/JPY spot price. |
-| `get_upcoming_macro_events` | Return scheduled USD and JPY economic events. |
-| `get_recent_mof_alerts` | Return news headlines with intervention keywords and tier scores. |
-| `get_market_ticks_summary` | Return the latest prices for `JPY=X`, `^TNX`, `^GSPC`, `^N225`, `^VIX`, and `GC=F`. |
+| Tool Name | Key Parameters | Output / Purpose |
+| :--- | :--- | :--- |
+| `get_latest_yield_spread` | `spot_symbol="JPY=X"` or `"EURUSD=X"`, `as_of_utc=None` | Returns 10Y sovereign yield spread (`spread_10y`, `spread_bps`), 5d/20d momentum, and latest spot price (`spot_price`, `spot_symbol`). |
+| `get_upcoming_macro_events` | `currency=None` (`USD`, `JPY`, `EUR`), `impact=None`, `limit=20`, `as_of_utc=None` | Returns scheduled economic calendar releases filtered by currency and impact. |
+| `get_recent_mof_alerts` | `min_tier=1`, `limit=10`, `as_of_utc=None` | Returns Japan MoF / BoJ verbal intervention headlines with tier scores (active for JPY pairs; returns empty/zero for EUR/USD). |
+| `get_market_ticks_summary` | `as_of_utc=None` | Returns latest prices and timestamps across spot FX, sovereign yield proxies (`^TNX`), equity benchmarks (`^GSPC`, `^N225`, `^STOXX50E`), VIX, and Gold. |
 
-### Configuration Steps
+### MCP Host Configuration
 
-1. Open the MCP configuration file for your AI host.
-2. Add the `usdjpy-sqlite` server entry:
-   ```json
-   {
-     "mcpServers": {
-       "usdjpy-sqlite": {
-         "command": "/Users/albert/Projects/fx-signal-reader/.venv/bin/python",
-         "args": ["-m", "fx_signal_reader.mcp.server"],
-         "env": {
-           "FX_DB_PATH": "/Users/albert/Projects/fx-signal-reader/data/usdjpy_signals.db"
-         }
-       }
-     }
-   }
-   ```
-3. Restart your AI host to load the four tools.
+Add server definitions to your host's MCP configuration file (e.g., `claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "usdjpy-signals": {
+      "command": "/path/to/fx-signal-reader/.venv/bin/python",
+      "args": ["-m", "fx_signal_reader.mcp.server"],
+      "env": {
+        "FX_PAIR": "USD/JPY",
+        "FX_DB_PATH": "/path/to/fx-signal-reader/data/usdjpy_signals.db"
+      }
+    },
+    "eurusd-signals": {
+      "command": "/path/to/fx-signal-reader/.venv/bin/python",
+      "args": ["-m", "fx_signal_reader.mcp.server"],
+      "env": {
+        "FX_PAIR": "EUR/USD",
+        "FX_DB_PATH": "/path/to/fx-signal-reader/data/eurusd_signals.db"
+      }
+    }
+  }
+}
+```
 
 ---
 
 ## 2. Call MCP Tools from Python
 
-Your Python agent can call MCP tools directly through `fx_signal_reader.mcp.client`.
-
-1. Activate the project virtual environment.
-2. Run this script to list tools and query the latest yield spread:
+Python agents can invoke MCP tools directly via `fx_signal_reader.mcp.client`:
 
 ```python
 from fx_signal_reader.mcp.client import (
@@ -51,35 +56,38 @@ from fx_signal_reader.mcp.client import (
     discover_tools_sync,
 )
 
+# Discover configured servers
 tools = discover_tools_sync()
-print("Servers:", list(tools.keys()))
-print("SQLite tools:", [t["namespaced_name"] for t in tools["usdjpy-sqlite"]])
+print("Connected MCP servers:", list(tools.keys()))
 
-spread = call_namespaced_tool_sync("usdjpy-sqlite:get_latest_yield_spread")
-print("Spread (bps):", spread["spread_bps"])
-print("Spot USD/JPY:", spread["usdjpy_spot"])
-
-alerts = call_namespaced_tool_sync(
-    "usdjpy-sqlite:get_recent_mof_alerts",
-    {"min_tier": 3, "limit": 3},
+# Query EUR/USD yield spread (DE 10Y Bund - US 10Y Treasury)
+eur_spread = call_namespaced_tool_sync(
+    "eurusd-signals:get_latest_yield_spread",
+    {"spot_symbol": "EURUSD=X"},
 )
-print("High-tier alerts:", len(alerts))
-```
+print("EUR/USD Spot Price:", eur_spread["spot_price"])
+print("DE-US 10Y Spread  :", eur_spread["spread_10y"], "%")
+print("Spread Momentum   :", eur_spread["momentum"])
 
-This client connects to every enabled server in `fx_signal_reader/mcp/mcp_servers.json`.
+# Query upcoming high-impact EUR and USD events
+events = call_namespaced_tool_sync(
+    "eurusd-signals:get_upcoming_macro_events",
+    {"currency": "EUR", "impact": "High", "limit": 5},
+)
+print(f"Found {len(events)} high-impact EUR events.")
+```
 
 ---
 
 ## 3. Run the LangGraph Workflow in Python
 
-The package includes a LangGraph workflow with four nodes:
+The package provides an end-to-end multi-agent signal and execution pipeline built on LangGraph:
 
-1. `macro_analyst`: Checks the 10Y yield spread and high-impact events.
-2. `risk_committee`: Checks VIX, cross-asset prices, and intervention risk.
-3. `human_approval_gate`: Pauses actionable `BUY` or `SELL` proposals before execution.
-4. `paper_execution`: Writes approved trades to `data/paper_trades.jsonl`.
+```text
+[macro_analyst] ──> [risk_committee] ──> [human_approval_gate] ──> [paper_execution / finalize_hold]
+```
 
-Run this script to execute the workflow and handle the approval gate:
+### Python Agent Execution Script
 
 ```python
 from fx_signal_reader.agent import (
@@ -88,57 +96,109 @@ from fx_signal_reader.agent import (
     resume_with_decision,
 )
 
-graph = build_signal_graph(db_path="data/usdjpy_signals.db")
-config = {"configurable": {"thread_id": "guide-demo-1"}}
+# 1. Build graph connected to EUR/USD database
+graph = build_signal_graph(db_path="data/eurusd_signals.db")
+config = {"configurable": {"thread_id": "agent-run-eurusd-01"}}
 
-initial_state = create_initial_state()
+# 2. Initialize state for EUR/USD with custom bracket parameters
+initial_state = create_initial_state(
+    pair="EUR/USD",
+    sl_pips=50.0,
+    tp_pips=100.0,
+    allowed_regimes=["RISK_ON"],
+)
+
+# 3. Execute until pause or completion
 state = graph.invoke(initial_state, config=config)
 
+# 4. Check approval gate
 snapshot = graph.get_state(config)
 if "paper_execution" in snapshot.next:
-    print("Proposal needs approval:", state["trade_proposal"])
+    proposal = state["trade_proposal"]
+    print(f"Actionable proposal generated: {proposal['action']} {proposal['pair']} @ {proposal['entry_price']}")
+    print(f"Position Units: {proposal['position_size_units']} | SL: {proposal['stop_loss']} | TP: {proposal['take_profit']}")
+
+    # Resume graph with approval decision
     state = resume_with_decision(
         graph,
         config,
         approved=True,
-        reviewer_notes="Approved in guide demo.",
+        reviewer_notes="Approved by autonomous supervisor.",
     )
-
-print("Final action:", state["trade_proposal"]["action"])
-print("Receipt status:", state["execution_receipt"]["status"])
+    print("Execution Receipt:", state["execution_receipt"]["status"])
+else:
+    print("Pipeline completed with non-actionable state:", state.get("trade_proposal", {}).get("action"))
 ```
-
-If the Risk Committee sets `veto_trade` to `True`, the workflow proposes `HOLD`. For `HOLD` proposals, the graph skips the approval prompt and sets status to `SKIPPED_HOLD`.
 
 ---
 
 ## 4. Call the CLI from Agent Tools
 
-External agents can also run `fx-pipeline` as a shell command with `--json`.
+External agent harnesses (such as AutoGen, CrewAI, or shell tools) can invoke the CLI with `--json`:
 
-1. Run the pipeline without auto-approval:
-   ```bash
-   .venv/bin/fx-pipeline --db-path data/usdjpy_signals.db --json
-   ```
-2. Add `--auto-approve` to execute actionable proposals immediately:
-   ```bash
-   .venv/bin/fx-pipeline --db-path data/usdjpy_signals.db --auto-approve --json
-   ```
-3. Add `--reject` to cancel actionable proposals:
-   ```bash
-   .venv/bin/fx-pipeline --db-path data/usdjpy_signals.db --reject --json
-   ```
+### Pipeline Execution
+```bash
+# Evaluate USD/JPY with auto-approval
+.venv/bin/fx-pipeline --pair USD/JPY --auto-approve --json
+
+# Evaluate EUR/USD with dynamic ATR brackets
+.venv/bin/fx-pipeline --pair EUR/USD --use-atr --allowed-regimes RISK_ON --json
+```
+
+### Backtest Replay
+```bash
+# Replay 2-year backtest on EUR/USD with JSON output
+.venv/bin/fx-backtest --pair EUR/USD \
+  --db-path data/backtest_signals_eurusd.db \
+  --step-hours 4 \
+  --allowed-regimes RISK_ON \
+  --breakeven-r 1.25 \
+  --json
+```
 
 ---
 
-## 5. Understand Signal Fields and Rules
+## 5. Understand Signal Fields, Regimes & Pair Policies
 
-Agents can read these key fields from the output state:
+### Universal Yield Bias (`yield_bias`)
 
-| Field | Values | Meaning |
-| :--- | :--- | :--- |
-| `yield_bias` | `BULLISH_USD`, `BEARISH_USD`, `NEUTRAL` | Direction from `spread_10y` (`> 2.0%` is bullish, `< 1.0%` is bearish). |
-| `risk_regime` | `RISK_ON`, `RISK_OFF`, `TRANSITIONAL` | Market regime from `^VIX` (`< 18` is risk-on, `>= 25` is risk-off). |
-| `intervention_risk_score` | `0.0` to `100.0` | Risk score from MoF alert tiers and proximity to `160.00`. |
-| `veto_trade` | `True` or `False` | `True` when `intervention_risk_score >= 70.0` or Tier 4 alerts appear. |
-| `execution_receipt.status` | `EXECUTED`, `SKIPPED_HOLD`, `CANCELLED_REJECTED` | Final result of the paper execution step. |
+Yield bias is determined by comparing sovereign bond yields:
+
+| Pair | Sovereign Spread Definition | Bullish Threshold | Bearish Threshold | Neutral Range |
+| :--- | :--- | :--- | :--- | :--- |
+| **USD/JPY** | $\text{US10Y} - \text{JGB10Y}$ | $\text{Spread} > +2.0\%$ | $\text{Spread} < +1.0\%$ | $+1.0\% \le \text{Spread} \le +2.0\%$ |
+| **EUR/USD** | $\text{DE10Y} - \text{US10Y}$ | $\text{Spread} > -1.0\%$ | $\text{Spread} < -2.0\%$ | $-2.0\% \le \text{Spread} \le -1.0\%$ |
+
+Universal `YieldBias` values:
+- `BULLISH`: Expects base currency appreciation (BUY).
+- `BEARISH`: Expects base currency depreciation (SELL).
+- `NEUTRAL`: No directional edge from yields (HOLD).
+- *Backward-compatible aliases:* `BULLISH_USD` (BUY on USD/JPY, SELL on EUR/USD) and `BEARISH_USD` (SELL on USD/JPY, BUY on EUR/USD).
+
+### Pair-Aware Risk Committee Policies
+
+The Risk Committee node automatically routes through `PairProfile.risk_policy`:
+
+#### 1. JPY Pairs (`VERBAL_LADDER`)
+- Evaluates Japan Ministry of Finance (MoF) verbal intervention escalation (Tiers 1 through 4).
+- Spot psychological barrier proximity (157.00, 158.50, 160.00).
+- Sets `intervention_risk_score` (0.0 to 100.0) and `intervention_alert_level`.
+- `trade_veto` is triggered if score $\ge 70.0$, Tier 4 alerts appear, or VIX $\ge 25.0$.
+
+#### 2. EUR Pairs (`CENTRAL_BANK`)
+- MoF intervention ladder is bypassed (`intervention_risk_score = 0.0`, `alert_level = NONE`).
+- **Tier-1 Event Blackout:** Automatically triggers `trade_veto = True` if a Tier-1 economic release (ECB Interest Rate Decision, FOMC Rate Decision, US Non-Farm Payrolls, or US CPI) is scheduled within $\pm 4$ hours of the evaluation timestamp.
+- **Falling-Knife Protection:** Vetoes BUY signals when 20-day yield spread momentum is falling sharply.
+- **Global Volatility Filter:** Vetoes trades when VIX $\ge 25.0$ (Risk-Off regime).
+
+### Position Sizing Mathematics
+
+Positions are calculated to guarantee equal dollar risk (e.g. 1% of equity) regardless of quote currency:
+
+#### Quote is USD (e.g. EUR/USD):
+$$\text{Units} = \left\lfloor \frac{\text{Capital} \times \text{Risk Fraction}}{\text{SL Distance}}\right\rfloor$$
+$$\text{PnL}_{\text{USD}} = (\text{Exit Price} - \text{Entry Price}) \times \text{Units}, \quad \text{PnL}_{\text{JPY}} = 0.0$$
+
+#### Base is USD (e.g. USD/JPY):
+$$\text{Units} = \left\lfloor \frac{\text{Capital} \times \text{Risk Fraction} \times \text{Spot Price}}{\text{SL Distance}}\right\rfloor$$
+$$\text{PnL}_{\text{JPY}} = (\text{Exit Price} - \text{Entry Price}) \times \text{Units}, \quad \text{PnL}_{\text{USD}} = \frac{\text{PnL}_{\text{JPY}}}{\text{Exit Price}}$$
