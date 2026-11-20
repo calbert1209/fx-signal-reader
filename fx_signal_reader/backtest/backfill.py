@@ -553,8 +553,24 @@ def backfill_jgb_yields(
         if rate is not None
     }
 
+    current_raw_2y = _parse_mof_csv_raw(resp_current.text, target_tenor="2年")
+    if used_historical_csv:
+        all_raw_2y = _parse_mof_csv_raw(resp_all.text, target_tenor="2年")
+        merged_raw_2y = {**all_raw_2y, **current_raw_2y}
+    else:
+        merged_raw_2y = current_raw_2y
+
+    merged_series_2y = {
+        iso_date: rate
+        for iso_date, rate in merged_raw_2y.items()
+        if rate is not None
+    }
+
     filtered_dates = sorted(
         d for d in merged_series if start_date_str <= d <= end_date_str
+    )
+    filtered_dates_2y = sorted(
+        d for d in merged_series_2y if start_date_str <= d <= end_date_str
     )
 
     rows_to_insert: list[tuple[str, str, float, float, float, float, float]] = []
@@ -563,6 +579,11 @@ def backfill_jgb_yields(
         ts_utc = f"{iso_date}T00:00:00Z"
         for sym in ("JGB10Y", "^JB10YR"):
             rows_to_insert.append((sym, ts_utc, rate, rate, rate, rate, 0.0))
+
+    for iso_date in filtered_dates_2y:
+        rate_2y = merged_series_2y[iso_date]
+        ts_utc = f"{iso_date}T00:00:00Z"
+        rows_to_insert.append(("JGB2Y", ts_utc, rate_2y, rate_2y, rate_2y, rate_2y, 0.0))
 
     conn = http_client.get_connection()
     try:
@@ -783,6 +804,38 @@ def backfill_yield_spreads(
                     logger.warning(msg)
                     warnings.append(msg)
 
+        if not us_2y_series:
+            yy_rows = conn.execute(
+                """
+                SELECT timestamp_utc, price
+                FROM market_ticks
+                WHERE symbol = '2YY=F'
+                  AND timestamp_utc >= ?
+                  AND timestamp_utc <= ?
+                ORDER BY timestamp_utc ASC
+                """,
+                (f"{lookback_start_str}T00:00:00Z", f"{end_date_str}T23:59:59Z"),
+            ).fetchall()
+            for row in yy_rows:
+                val = _coerce_finite_float(row["price"])
+                if val is not None:
+                    us_2y_series[row["timestamp_utc"][:10]] = val
+
+            if not us_2y_series:
+                try:
+                    yy_hist = yf.Ticker("2YY=F").history(
+                        start=lookback_start_str,
+                        end=(end_day + timedelta(days=1)).isoformat(),
+                        interval="1d",
+                    )
+                    us_2y_series = _extract_yf_rows_to_daily_close(
+                        yy_hist, lookback_start_str, end_date_str
+                    )
+                except Exception as exc:
+                    msg = f"Fallback yfinance 2YY=F download failed: {exc}"
+                    logger.warning(msg)
+                    warnings.append(msg)
+
         from fx_signal_reader.core.pair_profile import get_pair_profile
 
         profile = get_pair_profile(pair)
@@ -806,6 +859,24 @@ def backfill_yield_spreads(
             if val is not None:
                 foreign_10y_series[row["timestamp_utc"][:10]] = val
 
+        jp_2y_series: dict[str, float] = {}
+        if profile.is_base_usd and foreign_symbol == "JGB10Y":
+            jgb2y_rows = conn.execute(
+                """
+                SELECT timestamp_utc, price
+                FROM market_ticks
+                WHERE symbol = 'JGB2Y'
+                  AND timestamp_utc >= ?
+                  AND timestamp_utc <= ?
+                ORDER BY timestamp_utc ASC
+                """,
+                (f"{lookback_start_str}T00:00:00Z", f"{end_date_str}T23:59:59Z"),
+            ).fetchall()
+            for row in jgb2y_rows:
+                val = _coerce_finite_float(row["price"])
+                if val is not None:
+                    jp_2y_series[row["timestamp_utc"][:10]] = val
+
         if not us_10y_series or not foreign_10y_series:
             msg = (
                 "Insufficient yield inputs to align spreads "
@@ -818,6 +889,7 @@ def backfill_yield_spreads(
                 us_10y_series=us_10y_series,
                 jp_10y_series=foreign_10y_series,
                 us_2y_series=us_2y_series if us_2y_series else None,
+                jp_2y_series=jp_2y_series if jp_2y_series else None,
                 fill_method="ffill",
                 max_stale_days=5,
                 source_label=source_label,
@@ -970,3 +1042,23 @@ def backfill_historical_data(
         "news_headlines": intervention_summary,
         "db_counts": db_counts,
     }
+
+
+# Backfill alias for historical market ticks
+backfill_market_data = backfill_market_ticks
+
+__all__ = [
+    "DEFAULT_BACKTEST_DB_PATH",
+    "FRED_OBSERVATIONS_URL",
+    "MOF_JGB_ALL_URL",
+    "MOF_JGB_CURRENT_URL",
+    "SUPPORTED_YF_INTERVALS",
+    "YF_INTERVAL_MAX_DAYS",
+    "backfill_de_bund_yields",
+    "backfill_historical_data",
+    "backfill_jgb_yields",
+    "backfill_market_data",
+    "backfill_market_ticks",
+    "backfill_yield_spreads",
+]
+

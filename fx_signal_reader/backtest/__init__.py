@@ -3,6 +3,10 @@
 from fx_signal_reader.backtest.backfill import (
     DEFAULT_BACKTEST_DB_PATH,
     backfill_historical_data,
+    backfill_jgb_yields,
+    backfill_market_data,
+    backfill_market_ticks,
+    backfill_yield_spreads,
 )
 from fx_signal_reader.backtest.backfill_calendar import backfill_calendar
 from fx_signal_reader.backtest.backfill_intervention import (
@@ -33,6 +37,10 @@ __all__ = [
     "backfill_calendar",
     "backfill_historical_data",
     "backfill_intervention_headlines",
+    "backfill_jgb_yields",
+    "backfill_market_data",
+    "backfill_market_ticks",
+    "backfill_yield_spreads",
     "compute_backtest_metrics",
     "run_backtest",
     "simulate_trade_resolution",

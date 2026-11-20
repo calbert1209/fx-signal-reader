@@ -156,8 +156,11 @@ def format_backtest_summary(
             "[3] Data Coverage Diagnostics",
             (
                 f"    {pair_label} Bars={cov.get('bars', cov.get('jpy_bars', 0))} | Yield Spread={cov.get('yield_spread_pct', 0.0)}% | "
-                f"VIX={cov.get('vix_pct', 0.0)}% | Macro Events={cov.get('macro_events_pct', 0.0)}% | "
-                f"MoF Alerts={cov.get('mof_alerts_pct', 0.0)}%"
+                + (f"2Y Spread={cov.get('spread_2y_pct', 0.0)}% | " if "spread_2y_pct" in cov else "")
+                + (f"Oil={cov.get('oil_pct', 0.0)}% | " if "oil_pct" in cov else "")
+                + (f"Gotobi={cov.get('gotobi_pct', 0.0)}% | " if "gotobi_pct" in cov else "")
+                + f"VIX={cov.get('vix_pct', 0.0)}% | Macro Events={cov.get('macro_events_pct', 0.0)}% | "
+                + f"MoF Alerts={cov.get('mof_alerts_pct', 0.0)}%"
             ),
         ]
     )

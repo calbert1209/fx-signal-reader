@@ -50,6 +50,8 @@ from fx_signal_reader.agent.state import (
     create_initial_state,
     validate_state_models,
 )
+from fx_signal_reader.backtest.models import BacktestConfig
+from fx_signal_reader.backtest.simulator import run_backtest
 from fx_signal_reader.core import DEFAULT_SCHEMA_PATH as SCHEMA_PATH, PROJECT_ROOT
 import fx_signal_reader.mcp.server as mcp_server
 from fx_signal_reader.mcp.server import (
@@ -80,13 +82,22 @@ def _create_pit_db(
     try:
         conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
         if yield_rows:
-            conn.executemany(
-                """
-                INSERT INTO yield_spreads (timestamp_utc, us_2y, us_10y, jp_10y, spread_10y, source)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                yield_rows,
-            )
+            if yield_rows and len(yield_rows[0]) == 8:
+                conn.executemany(
+                    """
+                    INSERT INTO yield_spreads (timestamp_utc, us_2y, jp_2y, spread_2y, us_10y, jp_10y, spread_10y, source)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    yield_rows,
+                )
+            else:
+                conn.executemany(
+                    """
+                    INSERT INTO yield_spreads (timestamp_utc, us_2y, us_10y, jp_10y, spread_10y, source)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    yield_rows,
+                )
         if ticks:
             conn.executemany(
                 """
@@ -126,9 +137,10 @@ def _core_ticks_at(
     nikkei: float = 39500.0,
     gold: float = 2700.0,
     tnx: float = 4.5,
+    oil: float | None = None,
 ) -> list[tuple[str, str, float, float | None, float | None, float | None, float | None]]:
     """Build a complete set of core market ticks at a given timestamp."""
-    return [
+    ticks = [
         ("JPY=X", ts_utc, spot, spot - 0.1, spot + 0.1, spot - 0.2, 0.0),
         ("^TNX", ts_utc, tnx, tnx - 0.02, tnx + 0.02, tnx - 0.03, 0.0),
         ("^VIX", ts_utc, vix, vix - 0.2, vix + 0.3, vix - 0.3, 0.0),
@@ -136,6 +148,9 @@ def _core_ticks_at(
         ("^N225", ts_utc, nikkei, nikkei - 50.0, nikkei + 100.0, nikkei - 80.0, 500000.0),
         ("GC=F", ts_utc, gold, gold - 2.0, gold + 5.0, gold - 4.0, 1500.0),
     ]
+    if oil is not None:
+        ticks.append(("CL=F", ts_utc, oil, oil - 0.5, oil + 0.5, oil - 0.5, 50000.0))
+    return ticks
 
 
 class TestMCPPointInTimeIsolation(unittest.TestCase):
@@ -257,6 +272,58 @@ class TestMCPPointInTimeIsolation(unittest.TestCase):
         # Validation runs upfront even when symbols=[]
         with self.assertRaises(ValueError):
             get_market_ticks_summary(symbols=[], db_path=str(db_path), as_of_utc="bad-ts")
+
+    def test_get_market_ticks_summary_cl_f_isolation(self) -> None:
+        """Verify CL=F crude oil ticks respect as_of_utc and block future prices."""
+        t = self.BASE_T
+        db_path = _create_pit_db(
+            self._tmpdir / "cl_f.db",
+            ticks=[
+                ("CL=F", _ts(t, hours=-2), 70.0, 69.5, 70.5, 69.0, 50000.0),
+                ("CL=F", t, 71.5, 70.0, 72.0, 69.8, 60000.0),
+                ("CL=F", _ts(t, hours=1), 75.0, 74.0, 75.5, 73.5, 70000.0),
+            ],
+        )
+        res = get_market_ticks_summary(
+            symbols=["CL=F"],
+            db_path=str(db_path),
+            as_of_utc=t,
+        )
+        self.assertIn("CL=F", res["symbols"])
+        self.assertAlmostEqual(res["symbols"]["CL=F"]["close"], 71.5)
+        self.assertEqual(res["symbols"]["CL=F"]["timestamp_utc"], t)
+        self.assertNotEqual(res["symbols"]["CL=F"]["close"], 75.0)
+
+    def test_get_latest_yield_spread_2y_isolation_and_fallback(self) -> None:
+        """Verify 2Y yield spread respects as_of_utc and handles legacy/older DB gracefully."""
+        t = self.BASE_T
+        db_path = _create_pit_db(
+            self._tmpdir / "spreads_2y.db",
+            yield_rows=[
+                (t, 4.10, 0.60, 3.50, 4.60, 2.35, 2.25, "FRED+MoF"),
+                (_ts(t, hours=1), 3.00, 0.50, 2.50, 3.20, 2.90, 0.30, "future_row"),
+            ],
+            ticks=[
+                ("JPY=X", t, 152.50, 152.20, 152.60, 152.10, 0.0),
+            ],
+        )
+        res = get_latest_yield_spread(db_path=str(db_path), as_of_utc=t)
+        self.assertEqual(res["timestamp_utc"], t)
+        self.assertAlmostEqual(res["spread_10y"], 2.25)
+
+        # Legacy DB without 2Y data falls back gracefully
+        legacy_db = _create_pit_db(
+            self._tmpdir / "spreads_legacy.db",
+            yield_rows=[
+                (t, None, 4.40, 2.20, 2.20, "Legacy"),
+            ],
+            ticks=[
+                ("JPY=X", t, 152.50, 152.20, 152.60, 152.10, 0.0),
+            ],
+        )
+        res_legacy = get_latest_yield_spread(db_path=str(legacy_db), as_of_utc=t)
+        self.assertEqual(res_legacy["timestamp_utc"], t)
+        self.assertAlmostEqual(res_legacy["spread_10y"], 2.20)
 
     def test_get_recent_mof_alerts_as_of_utc_and_lookback_window(self) -> None:
         t = self.BASE_T
@@ -1049,6 +1116,60 @@ class TestGraphPointInTimeAndLedgerIsolation(unittest.TestCase):
         exec_out = exec_fn(approved_state)
         self.assertEqual(exec_out["execution_receipt"]["status"], "EXECUTED")
         self.assertFalse(ledger.exists())
+
+
+class TestBacktestSimulatorPointInTimeIntegration(unittest.TestCase):
+    """Verify run_backtest integrates CL=F and 2Y data in point-in-time mode, and falls back gracefully."""
+
+    def setUp(self) -> None:
+        self._tmpdir = Path(tempfile.mkdtemp(prefix="fx_pit_sim_"))
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def test_run_backtest_with_cl_f_and_2y_data(self) -> None:
+        """Verify backtest simulation executes cleanly when CL=F and 2Y data are present."""
+        t0 = "2026-11-17T00:00:00Z"
+        ticks: list[tuple[str, str, float, float | None, float | None, float | None, float | None]] = []
+        for i in range(12):
+            ts_bar = _ts(t0, hours=i)
+            ticks.extend(_core_ticks_at(ts_bar, spot=152.0 + (i * 0.05), vix=15.0, oil=71.0 + (i * 0.1)))
+
+        yield_rows = [
+            (t0, 4.10, 0.60, 3.50, 4.50, 1.10, 3.40, "FRED+MoF"),
+            (_ts(t0, hours=6), 4.12, 0.61, 3.51, 4.52, 1.11, 3.41, "FRED+MoF"),
+        ]
+        db_path = _create_pit_db(self._tmpdir / "sim_with_data.db", yield_rows=yield_rows, ticks=ticks)
+        cfg = BacktestConfig(pair="USD/JPY", step_hours=2, spread_pips=0.0)
+        report = run_backtest(db_path=str(db_path), config=cfg)
+
+        self.assertIsNotNone(report)
+        self.assertEqual(report.config.pair, "USD/JPY")
+        self.assertGreater(report.metrics.data_coverage["bars"], 0)
+        self.assertGreaterEqual(report.metrics.data_coverage.get("oil_pct", 0.0), 0.0)
+        self.assertGreaterEqual(report.metrics.data_coverage.get("spread_2y_pct", 0.0), 0.0)
+
+    def test_run_backtest_graceful_fallback_when_cl_f_and_2y_absent(self) -> None:
+        """Verify backtest simulation completes cleanly and gracefully when CL=F and 2Y data are absent."""
+        t0 = "2026-11-17T00:00:00Z"
+        ticks: list[tuple[str, str, float, float | None, float | None, float | None, float | None]] = []
+        for i in range(8):
+            ts_bar = _ts(t0, hours=i)
+            # No oil ticks added
+            ticks.extend(_core_ticks_at(ts_bar, spot=152.0 + (i * 0.05), vix=16.0))
+
+        # Legacy yield row without 2Y data
+        yield_rows = [
+            (t0, None, 4.50, 1.10, 3.40, "Legacy"),
+        ]
+        db_path = _create_pit_db(self._tmpdir / "sim_legacy.db", yield_rows=yield_rows, ticks=ticks)
+        cfg = BacktestConfig(pair="USD/JPY", step_hours=2, spread_pips=0.0)
+        report = run_backtest(db_path=str(db_path), config=cfg)
+
+        self.assertIsNotNone(report)
+        self.assertEqual(report.metrics.data_coverage["bars"], 8)
+        self.assertEqual(report.metrics.data_coverage.get("oil_pct", 0.0), 0.0)
+        self.assertEqual(report.metrics.data_coverage.get("spread_2y_pct", 0.0), 0.0)
 
 
 if __name__ == "__main__":
