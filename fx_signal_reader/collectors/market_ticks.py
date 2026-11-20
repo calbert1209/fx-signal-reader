@@ -48,6 +48,7 @@ class MarketTicksCollector(BaseCollector):
         "^N225",  # Nikkei 225 Index
         "^VIX",  # CBOE Volatility Index
         "GC=F",  # Gold Futures
+        "CL=F",  # WTI Crude Oil Futures (Crude Oil Terms-of-Trade)
     ]
 
     # EUR/USD watchlist (German DE10Y is ingested separately, like JGB10Y for JPY).

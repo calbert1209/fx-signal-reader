@@ -73,6 +73,7 @@ def _create_fixture_db(db_file: Path) -> None:
             ("^N225", "2026-11-18T06:00:00Z", 59150.0, 59000.0, 59200.0, 58950.0, 500000.0),
             ("^VIX", "2026-11-18T09:00:00Z", 23.5, 24.0, 24.2, 23.4, 0.0),
             ("GC=F", "2026-11-18T09:00:00Z", 3770.0, 3765.0, 3775.0, 3760.0, 2000.0),
+            ("CL=F", "2026-11-18T09:00:00Z", 71.50, 71.20, 71.80, 71.10, 150000.0),
         ],
     )
 
@@ -276,7 +277,7 @@ class TestDomainToolsWithTempDB(unittest.TestCase):
 
     def test_get_market_ticks_summary_core_and_custom(self) -> None:
         summary = get_market_ticks_summary(db_path=str(self.db_path))
-        self.assertEqual(summary["symbol_count"], 6)
+        self.assertEqual(summary["symbol_count"], 7)
         self.assertEqual(summary["missing_symbols"], [])
         self.assertEqual(summary["as_of_utc"], "2026-11-18T09:00:00Z")
 

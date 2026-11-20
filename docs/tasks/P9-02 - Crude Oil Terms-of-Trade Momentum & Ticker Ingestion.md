@@ -1,7 +1,7 @@
 # P9-02: Crude Oil Terms-of-Trade Momentum & Ticker Ingestion
 
 * **Phase:** Phase 9: Advanced USD/JPY Signals (Yield Curve, Terms-of-Trade & Intraday Fix)
-* **Status:** `PENDING`
+* **Status:** `COMPLETED`
 * **Complexity:** Single-Task Foundation
 * **Last Updated (UTC):** `2026-11-20T13:35:00Z`
 * **Implementation Plan:** [plan_p1_p2_p3_signals.md](file:///Users/albert/.gemini/antigravity/brain/df88ef12-66c7-48bc-a6ad-f98f47ed301e/plan_p1_p2_p3_signals.md)
@@ -33,7 +33,7 @@ Incorporate **WTI Crude Oil Futures (`CL=F`)** into market ticks collection and 
    - `compute_commodity_momentum` handles insufficient data, edge cases (zeros, infinities), and computes correct rolling returns and classifications.
    - Unit tests verify indicator math, edge cases, and collector execution.
 
-- [ ] `CL=F` added to `MarketTicksCollector` watchlist
-- [ ] `compute_commodity_momentum` implemented in `indicators.py`
-- [ ] Symmetric terms-of-trade regime classification tested
-- [ ] Unit tests written and passing
+- [x] `CL=F` added to `MarketTicksCollector` watchlist
+- [x] `compute_commodity_momentum` implemented in `indicators.py`
+- [x] Symmetric terms-of-trade regime classification tested
+- [x] Unit tests written and passing

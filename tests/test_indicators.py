@@ -20,13 +20,16 @@ from fx_signal_reader.agent.state import (
 )
 from fx_signal_reader.core import DEFAULT_SCHEMA_PATH
 from fx_signal_reader.core.indicators import (
+    classify_commodity_regime,
     classify_market_trend,
     classify_spread_momentum,
     compute_atr_series,
+    compute_commodity_momentum,
     compute_ema_series,
     compute_latest_atr,
     compute_latest_ema,
     compute_latest_sma,
+    compute_percentage_rate_of_change,
     compute_rate_of_change,
     compute_sma_series,
     compute_true_ranges,
@@ -358,6 +361,113 @@ class TestNodeTrendAndMomentumIntegration(unittest.TestCase):
         self.assertTrue(trans_out["risk_assessment"]["veto_trade"])
         self.assertIn("excluded by allowed_regimes", trans_out["risk_assessment"]["risk_notes"])
         self.assertEqual(trans_out["trade_proposal"]["action"], TradeAction.HOLD.value)
+
+
+class TestCommodityMomentum(unittest.TestCase):
+    """Verify calculations and edge case handling for commodity momentum and terms of trade."""
+
+    def test_percentage_rate_of_change_math(self) -> None:
+        prices = [100.0, 101.0, 102.0, 103.0, 104.0, 105.0]
+        # periods_back=5 -> (105.0 - 100.0) / 100.0 * 100.0 = +5.0%
+        roc = compute_percentage_rate_of_change(prices, periods_back=5)
+        self.assertAlmostEqual(roc or 0.0, 5.0, places=4)
+
+        # Insufficient items -> None
+        self.assertIsNone(compute_percentage_rate_of_change(prices, periods_back=6))
+
+    def test_commodity_momentum_surging_plunging_stable(self) -> None:
+        # 1. Surging via 5d RoC > 3.0%
+        prices_surging = [70.0, 70.0, 70.0, 70.0, 70.0, 73.5]  # +5%
+        res_surging = compute_commodity_momentum(prices_surging)
+        self.assertEqual(res_surging["regime"], "SURGING")
+        self.assertAlmostEqual(res_surging["roc_5d"] or 0.0, 5.0, places=2)
+        self.assertEqual(res_surging["current_price"], 73.5)
+
+        # 2. Plunging via 5d RoC < -3.0%
+        prices_plunging = [70.0, 70.0, 70.0, 70.0, 70.0, 66.5]  # -5%
+        res_plunging = compute_commodity_momentum(prices_plunging)
+        self.assertEqual(res_plunging["regime"], "PLUNGING")
+        self.assertAlmostEqual(res_plunging["roc_5d"] or 0.0, -5.0, places=2)
+
+        # 3. Stable (between -3.0% and +3.0%, no EMA)
+        prices_stable = [70.0, 70.0, 70.0, 70.0, 70.0, 70.7]  # +1.0%
+        res_stable = compute_commodity_momentum(prices_stable)
+        self.assertEqual(res_stable["regime"], "STABLE")
+        self.assertAlmostEqual(res_stable["roc_5d"] or 0.0, 1.0, places=2)
+
+        # 4. Surging via price > EMA-50 (with small positive or neutral RoC)
+        prices_ema_above = [60.0] * 50 + [70.0] * 5
+        res_ema_above = compute_commodity_momentum(prices_ema_above)
+        self.assertIsNotNone(res_ema_above["ema_50"])
+        self.assertGreater(res_ema_above["current_price"], res_ema_above["ema_50"])
+        self.assertEqual(res_ema_above["regime"], "SURGING")
+
+        # 5. Plunging takes precedence over price > EMA-50
+        prices_ema_drop = [60.0] * 45 + [80.0] * 5 + [70.0]
+        res_ema_drop = compute_commodity_momentum(prices_ema_drop)
+        self.assertGreater(res_ema_drop["current_price"], res_ema_drop["ema_50"])
+        self.assertLess(res_ema_drop["roc_5d"], -3.0)
+        self.assertEqual(res_ema_drop["regime"], "PLUNGING")
+
+    def test_commodity_momentum_edge_cases(self) -> None:
+        # Empty input
+        res_empty = compute_commodity_momentum([])
+        self.assertIsNone(res_empty["current_price"])
+        self.assertIsNone(res_empty["roc_5d"])
+        self.assertIsNone(res_empty["roc_20d"])
+        self.assertIsNone(res_empty["ema_50"])
+        self.assertEqual(res_empty["regime"], "STABLE")
+
+        # Single item
+        res_single = compute_commodity_momentum([75.0])
+        self.assertEqual(res_single["current_price"], 75.0)
+        self.assertIsNone(res_single["roc_5d"])
+        self.assertEqual(res_single["regime"], "STABLE")
+
+        # 21 items has roc_20d computed
+        prices_21 = [70.0] * 20 + [77.0]
+        res_21 = compute_commodity_momentum(prices_21)
+        self.assertIsNotNone(res_21["roc_5d"])
+        self.assertAlmostEqual(res_21["roc_20d"] or 0.0, 10.0, places=2)
+        self.assertIsNone(res_21["ema_50"])
+
+        # Zeros in prices: past price is 0
+        prices_with_zero = [0.0, 70.0, 70.0, 70.0, 70.0, 70.0]
+        res_zero = compute_commodity_momentum(prices_with_zero)
+        self.assertIsNone(res_zero["roc_5d"])
+        self.assertEqual(res_zero["regime"], "STABLE")
+
+        # All zero prices
+        all_zeros = [0.0] * 55
+        res_all_zeros = compute_commodity_momentum(all_zeros)
+        self.assertIsNone(res_all_zeros["roc_5d"])
+        self.assertEqual(res_all_zeros["ema_50"], 0.0)
+        self.assertEqual(res_all_zeros["regime"], "STABLE")
+
+        # Non-finite values raise ValueError
+        for bad_val in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(bad_val=bad_val):
+                with self.assertRaises(ValueError):
+                    compute_commodity_momentum([70.0, bad_val, 72.0])
+
+        # Invalid periods raise ValueError
+        for bad_period in (0, -1, 2.5, True, False, "5"):
+            with self.subTest(bad_period=bad_period):
+                with self.assertRaises(ValueError):
+                    compute_commodity_momentum([70.0, 71.0, 72.0], period=bad_period)  # type: ignore[arg-type]
+
+    def test_custom_period_and_classify_regime(self) -> None:
+        prices = [70.0] * 10 + [77.0]
+        res = compute_commodity_momentum(prices, period=10)
+        self.assertAlmostEqual(res["roc_10d"], 10.0, places=2)
+        self.assertEqual(res["regime"], "SURGING")
+
+        # classify_commodity_regime standalone helper
+        self.assertEqual(classify_commodity_regime(75.0, 4.0, 70.0), "SURGING")
+        self.assertEqual(classify_commodity_regime(75.0, -4.0, 70.0), "PLUNGING")
+        self.assertEqual(classify_commodity_regime(65.0, 0.0, 70.0), "STABLE")
+        self.assertEqual(classify_commodity_regime(75.0, 0.5, 70.0), "SURGING")
+        self.assertEqual(classify_commodity_regime(None, None, None), "STABLE")
 
 
 if __name__ == "__main__":

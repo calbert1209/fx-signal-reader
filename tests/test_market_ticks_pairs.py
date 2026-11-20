@@ -106,7 +106,7 @@ class TestCollectorConfig(unittest.TestCase):
         self.assertEqual(c.tickers, MarketTicksCollector.TICKERS)
         self.assertEqual(
             MarketTicksCollector.TICKERS,
-            ["JPY=X", "^TNX", "^GSPC", "^N225", "^VIX", "GC=F"],
+            ["JPY=X", "^TNX", "^GSPC", "^N225", "^VIX", "GC=F", "CL=F"],
         )
         self.assertTrue(c.db_path.name == "usdjpy_signals.db")
         self.assertTrue(MarketTicksCollector.MOF_JGB_CSV_URL.endswith("jgbcm.csv"))
