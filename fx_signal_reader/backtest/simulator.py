@@ -702,6 +702,9 @@ def run_backtest(
             "jpy_bars": 0,
             "steps_evaluated": 0,
             "yield_spread_pct": 0.0,
+            "spread_2y_pct": 0.0,
+            "oil_pct": 0.0,
+            "gotobi_pct": 0.0,
             "vix_pct": 0.0,
             "macro_events_pct": 0.0,
             "mof_alerts_pct": 0.0,
@@ -742,9 +745,19 @@ def run_backtest(
     trades_skipped_overlap = 0
 
     spread_hits = 0
+    spread_2y_hits = 0
+    oil_hits = 0
+    gotobi_hits = 0
     vix_hits = 0
     macro_hits = 0
     mof_hits = 0
+
+    def _get_val(obj: Any, key: str) -> Any:
+        if obj is None:
+            return None
+        if isinstance(obj, Mapping):
+            return obj.get(key)
+        return getattr(obj, key, None)
 
     for step_num, idx in enumerate(eval_indices, start=1):
         bar = bars[idx]
@@ -769,15 +782,21 @@ def run_backtest(
 
         macro_assessment = final_state.get("macro_assessment") or {}
         risk_assessment = final_state.get("risk_assessment") or {}
-        if macro_assessment.get("spread_10y") is not None:
+        if _get_val(macro_assessment, "spread_10y") is not None:
             spread_hits += 1
-        if risk_assessment.get("vix_level") is not None:
+        if _get_val(macro_assessment, "spread_2y") is not None:
+            spread_2y_hits += 1
+        if _get_val(macro_assessment, "crude_oil_price") is not None:
+            oil_hits += 1
+        if _get_val(macro_assessment, "gotobi_session") is not None:
+            gotobi_hits += 1
+        if _get_val(risk_assessment, "vix_level") is not None:
             vix_hits += 1
-        if macro_assessment.get("upcoming_high_impact_events"):
+        if _get_val(macro_assessment, "upcoming_high_impact_events"):
             macro_hits += 1
-        if risk_assessment.get("flagged_headlines"):
+        if _get_val(risk_assessment, "flagged_headlines"):
             mof_hits += 1
-        if risk_assessment.get("veto_trade"):
+        if _get_val(risk_assessment, "veto_trade"):
             total_vetoes += 1
 
         raw_proposal = final_state.get("trade_proposal")
@@ -815,6 +834,9 @@ def run_backtest(
         "jpy_bars": len(bars),
         "steps_evaluated": total_steps,
         "yield_spread_pct": round((spread_hits / denom) * 100.0, 2) if total_steps else 0.0,
+        "spread_2y_pct": round((spread_2y_hits / denom) * 100.0, 2) if total_steps else 0.0,
+        "oil_pct": round((oil_hits / denom) * 100.0, 2) if total_steps else 0.0,
+        "gotobi_pct": round((gotobi_hits / denom) * 100.0, 2) if total_steps else 0.0,
         "vix_pct": round((vix_hits / denom) * 100.0, 2) if total_steps else 0.0,
         "macro_events_pct": round((macro_hits / denom) * 100.0, 2) if total_steps else 0.0,
         "mof_alerts_pct": round((mof_hits / denom) * 100.0, 2) if total_steps else 0.0,

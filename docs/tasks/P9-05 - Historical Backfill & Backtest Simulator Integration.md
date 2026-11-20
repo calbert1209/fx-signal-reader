@@ -1,9 +1,9 @@
 # P9-05: Historical Backfill & Backtest Simulator Integration
 
 * **Phase:** Phase 9: Advanced USD/JPY Signals (Yield Curve, Terms-of-Trade & Intraday Fix)
-* **Status:** `PENDING`
+* **Status:** `COMPLETED`
 * **Complexity:** Integration Task (Depends on P9-01, P9-02, P9-03)
-* **Last Updated (UTC):** `2026-11-20T13:35:00Z`
+* **Last Updated (UTC):** `2026-11-20T14:30:00Z`
 * **Implementation Plan:** [plan_p1_p2_p3_signals.md](file:///Users/albert/.gemini/antigravity/brain/df88ef12-66c7-48bc-a6ad-f98f47ed301e/plan_p1_p2_p3_signals.md)
 
 ---
@@ -32,6 +32,6 @@ Ensure historical replay and point-in-time backtesting (`fx-backtest`) leverage 
    - Point-in-time backtests execute cleanly with dynamic Gotobi session checks matching historical bar timestamps.
    - Backtest test suite passes with zero regressions.
 
-- [ ] `backtest/backfill.py` updated for historical `CL=F` and 2Y sovereign yields
-- [ ] Point-in-time replay verified for all 3 signals
-- [ ] Backtest unit tests written and passing
+- [x] `backtest/backfill.py` updated for historical `CL=F` and 2Y sovereign yields
+- [x] Point-in-time replay verified for all 3 signals
+- [x] Backtest unit tests written and passing

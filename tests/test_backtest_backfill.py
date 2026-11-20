@@ -208,7 +208,8 @@ class TestBacktestBackfill(unittest.TestCase):
             self.assertFalse(res_current["used_historical_csv"])
             self.assertEqual(calls, [MOF_JGB_CURRENT_URL])
             self.assertEqual(res_current["dates_covered"], 2)  # 11-02 and 11-17 (11-04 has '-')
-            self.assertEqual(res_current["rows_inserted"], 4)
+            # 4 rows for 10Y (JGB10Y, ^JB10YR) + 3 rows for 2Y (JGB2Y on 11-02, 11-04, 11-17)
+            self.assertEqual(res_current["rows_inserted"], 7)
 
             # 2. Range starting in Showa era -> fetches jgbcm_all.csv & merges
             calls.clear()
@@ -221,7 +222,8 @@ class TestBacktestBackfill(unittest.TestCase):
             self.assertEqual(calls, [MOF_JGB_CURRENT_URL, MOF_JGB_ALL_URL])
             # Dates: S60.1.10 (1985-01-10), H30.12.31 (2018-12-31), 2024/5/1, 2026-10-30, R8.11.2, R8.11.17
             self.assertEqual(res_all["dates_covered"], 6)
-            self.assertEqual(res_all["rows_inserted"], 12)
+            # 12 rows for 10Y (6 dates * 2) + 7 rows for 2Y (7 dates)
+            self.assertEqual(res_all["rows_inserted"], 19)
 
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
@@ -233,6 +235,10 @@ class TestBacktestBackfill(unittest.TestCase):
             jb_rows = conn.execute(
                 "SELECT symbol, timestamp_utc, price FROM market_ticks "
                 "WHERE symbol = '^JB10YR' ORDER BY timestamp_utc ASC"
+            ).fetchall()
+            jgb2y_rows = conn.execute(
+                "SELECT symbol, timestamp_utc, price FROM market_ticks "
+                "WHERE symbol = 'JGB2Y' ORDER BY timestamp_utc ASC"
             ).fetchall()
         finally:
             conn.close()
@@ -260,6 +266,16 @@ class TestBacktestBackfill(unittest.TestCase):
             [(r["timestamp_utc"], r["price"]) for r in jb_rows],
             [(r["timestamp_utc"], r["price"]) for r in jgb_rows],
         )
+
+        by_ts_2y = {r["timestamp_utc"]: r for r in jgb2y_rows}
+        self.assertIn("1985-01-10T00:00:00Z", by_ts_2y)
+        self.assertAlmostEqual(by_ts_2y["1985-01-10T00:00:00Z"]["price"], 5.1)
+        self.assertIn("2026-11-02T00:00:00Z", by_ts_2y)
+        self.assertAlmostEqual(by_ts_2y["2026-11-02T00:00:00Z"]["price"], 0.60)
+        self.assertIn("2026-11-04T00:00:00Z", by_ts_2y)
+        self.assertAlmostEqual(by_ts_2y["2026-11-04T00:00:00Z"]["price"], 0.60)
+        self.assertIn("2026-11-17T00:00:00Z", by_ts_2y)
+        self.assertAlmostEqual(by_ts_2y["2026-11-17T00:00:00Z"]["price"], 0.65)
 
     def test_backfill_market_ticks_tz_nan_inclusive_end_and_idempotency(self) -> None:
         # Multi-timezone DataFrames + MultiIndex + NaN Close / NaN Volume / NaN Open
@@ -527,7 +543,13 @@ class TestBacktestBackfill(unittest.TestCase):
         finally:
             conn.close()
 
-        with mock.patch.dict(os.environ, {"FRED_API_KEY": ""}):
+        mock_empty_ticker = mock.MagicMock()
+        mock_empty_ticker.history.return_value = pd.DataFrame()
+
+        with (
+            mock.patch.dict(os.environ, {"FRED_API_KEY": ""}),
+            mock.patch.object(backfill_mod.yf, "Ticker", return_value=mock_empty_ticker),
+        ):
             res_db = backfill_yield_spreads(
                 db_path=self.db_path,
                 start_date="2026-11-17",
@@ -568,12 +590,20 @@ class TestBacktestBackfill(unittest.TestCase):
             {"Close": [4.40]},
             index=pd.DatetimeIndex(["2026-11-17 00:00:00"], tz="America/Chicago"),
         )
-        mock_ticker = mock.MagicMock()
-        mock_ticker.history.return_value = tnx_df
+
+        mock_tnx = mock.MagicMock()
+        mock_tnx.history.return_value = tnx_df
+        mock_2y = mock.MagicMock()
+        mock_2y.history.return_value = pd.DataFrame()
+
+        def _fake_ticker_call(sym: str):
+            if sym == "^TNX":
+                return mock_tnx
+            return mock_2y
 
         with (
             mock.patch.dict(os.environ, {"FRED_API_KEY": ""}),
-            mock.patch.object(backfill_mod.yf, "Ticker", return_value=mock_ticker),
+            mock.patch.object(backfill_mod.yf, "Ticker", side_effect=_fake_ticker_call),
         ):
             res_yf = backfill_yield_spreads(
                 db_path=db_b,
@@ -582,8 +612,8 @@ class TestBacktestBackfill(unittest.TestCase):
             )
 
         self.assertEqual(res_yf["rows_inserted"], 1)
-        mock_ticker.history.assert_called_once()
-        self.assertEqual(mock_ticker.history.call_args.kwargs["interval"], "1d")
+        mock_tnx.history.assert_called_once()
+        self.assertEqual(mock_tnx.history.call_args.kwargs["interval"], "1d")
 
     def test_backfill_yield_spreads_fred_error_falls_back_to_tnx_and_explicit_key(self) -> None:
         conn = self._init_empty_db()
@@ -938,3 +968,169 @@ class TestBacktestBackfill(unittest.TestCase):
                 ("2026-01-05T00:00:00Z", 1.200),
             ],
         )
+
+    def test_backfill_market_data_cl_f_download_and_alias(self) -> None:
+        """Verify backfill_market_data downloads CL=F (crude oil) and inserts into market_ticks."""
+        self.assertIn("CL=F", MarketTicksCollector.TICKERS)
+        self.assertIs(backfill_mod.backfill_market_data, backfill_mod.backfill_market_ticks)
+
+        cl_df = pd.DataFrame(
+            {
+                "Open": [70.50, 71.00],
+                "High": [71.20, 71.80],
+                "Low": [70.10, 70.90],
+                "Close": [71.00, 71.50],
+                "Volume": [150000.0, 160000.0],
+            },
+            index=pd.DatetimeIndex(
+                ["2026-11-17 14:00:00", "2026-11-17 15:00:00"], tz="UTC"
+            ),
+        )
+
+        mock_ticker = mock.MagicMock()
+        mock_ticker.history.return_value = cl_df
+
+        with mock.patch.object(backfill_mod.yf, "Ticker", return_value=mock_ticker):
+            summary = backfill_mod.backfill_market_data(
+                db_path=self.db_path,
+                start_date="2026-11-17",
+                end_date="2026-11-17",
+                interval="1h",
+                symbols=["CL=F"],
+            )
+
+        self.assertEqual(summary["status"], "SUCCESS")
+        self.assertEqual(summary["total_rows_inserted"], 2)
+        self.assertIn("CL=F", summary["symbols"])
+        self.assertEqual(summary["symbols"]["CL=F"]["rows_inserted"], 2)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                "SELECT symbol, timestamp_utc, price, open, high, low, volume "
+                "FROM market_ticks WHERE symbol = 'CL=F' ORDER BY timestamp_utc ASC"
+            ).fetchall()
+        finally:
+            conn.close()
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["symbol"], "CL=F")
+        self.assertEqual(rows[0]["timestamp_utc"], "2026-11-17T14:00:00Z")
+        self.assertAlmostEqual(rows[0]["price"], 71.00)
+        self.assertAlmostEqual(rows[1]["price"], 71.50)
+
+    def test_backfill_yield_spreads_2y_fred_spread_calculation(self) -> None:
+        """Verify FRED DGS2 + MoF JGB2Y computes spread_2y = round(us_2y - jp_2y, 4)."""
+        conn = self._init_empty_db()
+        try:
+            # Pre-seed JGB10Y and JGB2Y in market_ticks
+            conn.executemany(
+                """
+                INSERT INTO market_ticks (symbol, timestamp_utc, price, open, high, low, volume)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    ("JGB10Y", "2026-11-17T00:00:00Z", 1.050, 1.050, 1.050, 1.050, 0.0),
+                    ("JGB2Y", "2026-11-17T00:00:00Z", 0.625, 0.625, 0.625, 0.625, 0.0),
+                ],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        def _fake_fred_get(url: str, params=None, **kwargs):
+            series_id = (params or {}).get("series_id")
+            if series_id == "DGS10":
+                return _make_mock_response(
+                    json_data={"observations": [{"date": "2026-11-17", "value": "4.450"}]}
+                )
+            if series_id == "DGS2":
+                return _make_mock_response(
+                    json_data={"observations": [{"date": "2026-11-17", "value": "4.125"}]}
+                )
+            raise AssertionError(f"Unexpected series_id: {series_id}")
+
+        with (
+            mock.patch.dict(os.environ, {"FRED_API_KEY": "test-key"}),
+            mock.patch(
+                "fx_signal_reader.collectors.base.requests.get",
+                side_effect=_fake_fred_get,
+            ),
+        ):
+            summary = backfill_yield_spreads(
+                db_path=self.db_path,
+                start_date="2026-11-17",
+                end_date="2026-11-17",
+            )
+
+        self.assertEqual(summary["status"], "SUCCESS")
+        self.assertEqual(summary["rows_inserted"], 1)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT * FROM yield_spreads").fetchone()
+        finally:
+            conn.close()
+
+        self.assertIsNotNone(row)
+        self.assertAlmostEqual(row["us_10y"], 4.450)
+        self.assertAlmostEqual(row["jp_10y"], 1.050)
+        self.assertAlmostEqual(row["spread_10y"], 3.400)
+        self.assertAlmostEqual(row["us_2y"], 4.125)
+        self.assertAlmostEqual(row["jp_2y"], 0.625)
+        # 4.125 - 0.625 = 3.500
+        self.assertAlmostEqual(row["spread_2y"], 3.500)
+
+    def test_backfill_yield_spreads_2y_yahoo_fallback(self) -> None:
+        """Verify Yahoo Finance 2YY=F fallback computes spread_2y = round(us_2y - jp_2y, 4)."""
+        conn = self._init_empty_db()
+        try:
+            conn.executemany(
+                """
+                INSERT INTO market_ticks (symbol, timestamp_utc, price, open, high, low, volume)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    ("^TNX", "2026-11-17T00:00:00Z", 4.350, 4.350, 4.350, 4.350, 0.0),
+                    ("JGB10Y", "2026-11-17T00:00:00Z", 1.050, 1.050, 1.050, 1.050, 0.0),
+                    ("JGB2Y", "2026-11-17T00:00:00Z", 0.550, 0.550, 0.550, 0.550, 0.0),
+                ],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        yy_df = pd.DataFrame(
+            {"Close": [4.200]},
+            index=pd.DatetimeIndex(["2026-11-17 00:00:00"], tz="America/Chicago"),
+        )
+        mock_ticker = mock.MagicMock()
+        mock_ticker.history.return_value = yy_df
+
+        with (
+            mock.patch.dict(os.environ, {"FRED_API_KEY": ""}),
+            mock.patch.object(backfill_mod.yf, "Ticker", return_value=mock_ticker),
+        ):
+            summary = backfill_yield_spreads(
+                db_path=self.db_path,
+                start_date="2026-11-17",
+                end_date="2026-11-17",
+            )
+
+        self.assertEqual(summary["status"], "SUCCESS")
+        self.assertTrue(summary["fallback_used"])
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT * FROM yield_spreads").fetchone()
+        finally:
+            conn.close()
+
+        self.assertAlmostEqual(row["us_2y"], 4.200)
+        self.assertAlmostEqual(row["jp_2y"], 0.550)
+        # 4.200 - 0.550 = 3.650
+        self.assertAlmostEqual(row["spread_2y"], 3.650)
+        self.assertAlmostEqual(row["spread_10y"], 3.300)
