@@ -90,11 +90,19 @@ The architecture is designed to run locally with minimal cloud dependencies, com
 - [x] **Specialist agent nodes:** Implemented `macro_analyst_node` and `risk_committee_node` (`agent/nodes.py`) consuming read-only SQLite tools and enforcing 4-tier MoF intervention veto logic (`9/9` tests passing).
 - [x] **Approval gate & paper execution:** Built full `StateGraph(AgentState)` with `InMemorySaver` checkpointer, `interrupt_before=["paper_execution"]` human gate, JSONL paper ledger (`data/paper_trades.jsonl`), and CLI runner `run_pipeline.py` (`7/7` tests passing).
 
+### Phase 9: Advanced USD/JPY Signals (Yield Curve, Terms-of-Trade & Intraday Fix)
+- [ ] **P9-01 (2Y Sovereign Yield Spread & Schema Migration):** Add `jp_2y` and `spread_2y` columns to `yield_spreads` with safe migration, extract 2Y JGB from MoF CSV, add Yahoo `2YY=F` fallback for US 2Y, and implement `compute_2y_yield_spread`. *(Parallel Track A)*
+- [x] **P9-02 (Crude Oil Terms-of-Trade Momentum & Ticker Ingestion):** Add `CL=F` (WTI crude) to `MarketTicksCollector` watchlist, implement `compute_commodity_momentum` (5d/20d RoC and EMA-50) in `core/indicators.py`, and store candles in `market_ticks`. *(Parallel Track B)*
+- [ ] **P9-03 (Tokyo Gotobi & Nakane Fixing Intraday Session Engine):** Implement `core/gotobi.py` with Japanese holiday/weekend business day rollback, Gotobi settlement detection (5/10/15/20/25/30/EOM), and Pre-Fix/Post-Fix window evaluation. *(Parallel Track C)*
+- [ ] **P9-04 (Specialist Agent Nodes & MCP Layer Integration):** Integrate P1 (2Y spread confirmation/curve divergence), P2 (symmetric terms-of-trade oil bias), and P3 (Gotobi pre-fix conviction boost) into `MacroAssessment` and `TradeProposal` in `agent/nodes.py`, and expose via MCP server. *(Downstream Track D)*
+- [ ] **P9-05 (Historical Backfill & Backtest Simulator Integration):** Extend `fx-backtest --backfill` to fetch historical `CL=F` candles and 2Y sovereign yields (MoF 2Y and FRED/Yahoo 2Y), ensuring all 3 signals operate during historical replays. *(Downstream Track E)*
+- [ ] **P9-06 (Multi-Signal Documentation Overhaul & Verification):** Synchronize `README.md`, `AGENTS.md`, `docs/AGENT_GUIDE.md`, and `USD-JPY Signal Pipeline Plan.md` with the 3 new signals, verify full regression test suite (288+ tests), and validate CLI entrypoints. *(Final Track F)*
+
 ---
 
 ## 5. Current Implementation Status
 
-All tasks across **Phases 1, 2, and 3** are complete and verified:
 * **Phase 1 (Data Sources):** FRED (`DGS2`/`DGS10`), Yahoo Finance (`JPY=X`, `^TNX`, `^GSPC`, `^N225`, `^VIX`, `GC=F`) + Japan MoF CSV JGB 10Y benchmark (`mof.go.jp`), Forex Factory calendar JSON/cache, and 10 curated intervention RSS wires.
 * **Phase 2 (Collection & Containerization):** WAL-mode SQLite schema (`schema.sql`), modular collectors (`collectors/`), ISO-8601 UTC normalization & spread engine (`normalizer.py`, `spread_calculator.py`), tiered session-aware scheduler (`scheduler.py`), and `Dockerfile` / `docker-compose.yml`.
 * **Phase 3 (MCP & LangGraph Agents):** Read-only SQLite MCP server (`mcp_server.py`), dual-server stdio MCP client (`mcp_client.py`, `mcp_servers.json`), typed LangGraph state & specialist nodes (`agent/state.py`, `agent/nodes.py`), and `interrupt_before` human approval gate + paper execution (`agent/graph.py`, `run_pipeline.py`).
+* **Phase 9 (Advanced USD/JPY Signals):** Registered in Google Drive Task Tracker (`P9-01` through `P9-06`). Parallel execution tracks defined for 2Y Yield Curve, Crude Oil Terms of Trade, and Tokyo Gotobi Fix.

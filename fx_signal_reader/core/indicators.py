@@ -9,7 +9,7 @@ rate-of-change (RoC) helpers plus regime classification utilities.
 from __future__ import annotations
 
 import math
-from typing import Sequence
+from typing import Any, Sequence
 
 DEFAULT_EMA_PERIOD = 50
 DEFAULT_SMA_PERIOD = 200
@@ -19,6 +19,13 @@ SPREAD_CONTRACTING_5D_THRESHOLD = -0.10
 SPREAD_CONTRACTING_20D_THRESHOLD = -0.20
 SPREAD_EXPANDING_5D_THRESHOLD = 0.10
 SPREAD_EXPANDING_20D_THRESHOLD = 0.20
+
+DEFAULT_COMMODITY_ROC_PERIOD = 5
+COMMODITY_ROC_SHORT_PERIOD = DEFAULT_COMMODITY_ROC_PERIOD
+COMMODITY_ROC_LONG_PERIOD = 20
+COMMODITY_EMA_PERIOD = 50
+COMMODITY_SURGE_THRESHOLD_PCT = 3.0
+COMMODITY_PLUNGE_THRESHOLD_PCT = -3.0
 
 
 def _validate_positive_period(period: int, name: str) -> int:
@@ -210,3 +217,104 @@ def compute_latest_atr(
     if len(trs) < win:
         return None
     return round(sum(trs[-win:]) / win, 6)
+
+
+def compute_percentage_rate_of_change(
+    values: Sequence[float],
+    periods_back: int,
+) -> float | None:
+    """Compute percentage change `((values[-1] - values[-1 - periods_back]) / values[-1 - periods_back]) * 100.0` rounded to 4 decimals."""
+    lookback = _validate_positive_period(periods_back, "periods_back")
+    series = _coerce_finite_float_sequence(values)
+    if len(series) <= lookback:
+        return None
+    past = series[-1 - lookback]
+    if past <= 0.0:
+        return None
+    curr = series[-1]
+    return round(((curr - past) / past) * 100.0, 4)
+
+
+def classify_commodity_regime(
+    current_price: float | None,
+    roc_5d: float | None,
+    ema_50: float | None,
+    surge_threshold: float = COMMODITY_SURGE_THRESHOLD_PCT,
+    plunge_threshold: float = COMMODITY_PLUNGE_THRESHOLD_PCT,
+) -> str:
+    """
+    Classify terms-of-trade commodity momentum regime as SURGING, PLUNGING, or STABLE.
+
+    - PLUNGING: 5d RoC < -3.0% (Positive terms-of-trade shock for Japan -> JPY supportive).
+    - SURGING: 5d RoC > +3.0% or current_price > ema_50 (Negative terms-of-trade shock for Japan -> USD/JPY tailwind).
+    - STABLE: Neutral terms-of-trade momentum.
+    """
+    if roc_5d is not None and roc_5d < plunge_threshold:
+        return "PLUNGING"
+    if (roc_5d is not None and roc_5d > surge_threshold) or (
+        current_price is not None and ema_50 is not None and current_price > ema_50
+    ):
+        return "SURGING"
+    return "STABLE"
+
+
+def compute_commodity_momentum(
+    prices: Sequence[float],
+    period: int = DEFAULT_COMMODITY_ROC_PERIOD,
+) -> dict[str, Any]:
+    """
+    Compute commodity (e.g. WTI crude oil CL=F) terms-of-trade momentum metrics.
+
+    Computes:
+      - Latest price
+      - Short-term percentage rate-of-change (period-day RoC, default 5-day)
+      - Long-term percentage rate-of-change (20-day RoC)
+      - 50-day EMA and price comparison
+      - Terms-of-trade regime classification ('SURGING', 'PLUNGING', 'STABLE')
+
+    Handles empty sequences, insufficient bars, and edge cases (zeros, non-positive bases).
+    Raises ValueError on non-finite values or invalid lookback periods.
+    """
+    lookback = _validate_positive_period(period, "period")
+    series = _coerce_finite_float_sequence(prices)
+    if not series:
+        return {
+            "current_price": None,
+            "price": None,
+            "roc_5d": None,
+            "roc_5d_pct": None,
+            "roc_20d": None,
+            "roc_20d_pct": None,
+            "ema_50": None,
+            "regime": "STABLE",
+        }
+
+    current_price = series[-1]
+    roc_short = compute_percentage_rate_of_change(series, periods_back=lookback)
+    roc_20d = compute_percentage_rate_of_change(series, periods_back=COMMODITY_ROC_LONG_PERIOD)
+    ema_50 = compute_latest_ema(series, period=COMMODITY_EMA_PERIOD)
+
+    # 5d RoC used for regime classification
+    roc_5d = roc_short if lookback == 5 else compute_percentage_rate_of_change(series, periods_back=5)
+
+    regime = classify_commodity_regime(
+        current_price=current_price,
+        roc_5d=roc_5d,
+        ema_50=ema_50,
+    )
+
+    result: dict[str, Any] = {
+        "current_price": current_price,
+        "price": current_price,
+        "roc_5d": roc_5d,
+        "roc_5d_pct": roc_5d,
+        "roc_20d": roc_20d,
+        "roc_20d_pct": roc_20d,
+        "ema_50": ema_50,
+        "regime": regime,
+    }
+    if lookback != 5:
+        result[f"roc_{lookback}d"] = roc_short
+        result[f"roc_{lookback}d_pct"] = roc_short
+
+    return result
