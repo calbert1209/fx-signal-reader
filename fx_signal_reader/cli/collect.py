@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
-from fx_signal_reader.collectors.base import BaseCollector
+from fx_signal_reader.collectors.base import BaseCollector, migrate_yield_spreads_schema
 from fx_signal_reader.collectors.calendar import CalendarCollector
 from fx_signal_reader.collectors.market_ticks import MarketTicksCollector
 from fx_signal_reader.collectors.news_rss import NewsRSSCollector
@@ -39,6 +39,7 @@ def init_db(db_path: Path, schema_path: Path) -> sqlite3.Connection:
     if schema_path.exists():
         conn.executescript(schema_path.read_text(encoding="utf-8"))
         conn.commit()
+    migrate_yield_spreads_schema(conn)
     return conn
 
 

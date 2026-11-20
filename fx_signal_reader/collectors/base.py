@@ -27,6 +27,42 @@ logging.basicConfig(
 logger = logging.getLogger("BaseCollector")
 
 
+def migrate_yield_spreads_schema(
+    conn: sqlite3.Connection, logger: Optional[logging.Logger] = None
+) -> None:
+    """
+    Safely and idempotently adds `jp_2y` and `spread_2y` columns to `yield_spreads`
+    if they are missing from existing database tables.
+    """
+    try:
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(yield_spreads);")
+        rows = cursor.fetchall()
+        if not rows:
+            return  # Table does not exist yet
+
+        # Column name is index 1 in PRAGMA table_info (or key "name" if Row)
+        existing_cols = {row[1] if isinstance(row, tuple) else row["name"] for row in rows}
+
+        if "jp_2y" not in existing_cols:
+            if logger:
+                logger.info("Migrating yield_spreads: adding column jp_2y REAL")
+            conn.execute("ALTER TABLE yield_spreads ADD COLUMN jp_2y REAL;")
+
+        if "spread_2y" not in existing_cols:
+            if logger:
+                logger.info("Migrating yield_spreads: adding column spread_2y REAL")
+            conn.execute("ALTER TABLE yield_spreads ADD COLUMN spread_2y REAL;")
+
+        conn.commit()
+    except Exception as exc:
+        msg = f"Error checking/migrating yield_spreads schema: {exc}"
+        if logger:
+            logger.warning(msg)
+        else:
+            logging.getLogger("BaseCollector").warning(msg)
+
+
 class BaseCollector(ABC):
     """
     Abstract base class for all signal data collectors.
@@ -54,6 +90,18 @@ class BaseCollector(ABC):
         self.timeout = timeout
         self.logger = logging.getLogger(self.__class__.__name__)
 
+    def init_db(self, conn: sqlite3.Connection) -> None:
+        """
+        Initializes schema if schema file exists and applies idempotent column migrations.
+        Safely adds `jp_2y` and `spread_2y` to `yield_spreads` if missing in existing databases.
+        """
+        if self.schema_path.exists():
+            schema_sql = self.schema_path.read_text(encoding="utf-8")
+            conn.executescript(schema_sql)
+            conn.commit()
+
+        migrate_yield_spreads_schema(conn, logger=self.logger)
+
     def get_connection(self) -> sqlite3.Connection:
         """
         Creates and returns a SQLite connection configured in WAL mode.
@@ -66,12 +114,7 @@ class BaseCollector(ABC):
         conn.execute("PRAGMA foreign_keys = ON;")
         conn.row_factory = sqlite3.Row
 
-        # Initialize schema if schema file exists
-        if self.schema_path.exists():
-            schema_sql = self.schema_path.read_text(encoding="utf-8")
-            conn.executescript(schema_sql)
-            conn.commit()
-
+        self.init_db(conn)
         return conn
 
     def execute_with_retry(
