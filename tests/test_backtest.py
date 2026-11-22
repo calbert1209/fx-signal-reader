@@ -344,6 +344,11 @@ class TestBacktestCLI(unittest.TestCase):
             self.assertEqual(payload["config"]["allowed_regimes"], ["RISK_ON", "TRANSITIONAL"])
             self.assertAlmostEqual(payload["config"]["risk_fraction"], 0.025)
 
+            # Verify --help formatting renders without argparse % interpolation errors
+            help_text = backtest_cli.build_arg_parser().format_help()
+            self.assertIn("--risk-pct", help_text)
+            self.assertIn("2.0%; default: 1.0%", " ".join(help_text.split()))
+
             # Verify pipeline CLI parser accepts the matching P7-06 strategy flags
             from fx_signal_reader.cli import pipeline as pipeline_cli
 
