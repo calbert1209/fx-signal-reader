@@ -1054,13 +1054,38 @@ def risk_committee_node(
     account_capital_usd = (
         _safe_float(state.get("account_capital_usd")) or DEFAULT_ACCOUNT_CAPITAL_USD
     )
-    risk_fraction = _safe_float(state.get("risk_fraction")) or DEFAULT_RISK_FRACTION
+    raw_overrides = state.get("regime_overrides")
+    regime_cfg: dict[str, Any] = (
+        raw_overrides.get(risk_regime.value) or {}
+        if isinstance(raw_overrides, dict)
+        else {}
+    )
+    risk_fraction = (
+        _safe_float(regime_cfg.get("risk_fraction"))
+        or _safe_float(state.get("risk_fraction"))
+        or DEFAULT_RISK_FRACTION
+    )
+    effective_sl_pips = (
+        _safe_float(regime_cfg.get("sl_pips"))
+        if regime_cfg.get("sl_pips") is not None
+        else _safe_float(state.get("sl_pips"))
+    )
+    effective_tp_pips = (
+        _safe_float(regime_cfg.get("tp_pips"))
+        if regime_cfg.get("tp_pips") is not None
+        else _safe_float(state.get("tp_pips"))
+    )
+    effective_use_atr = (
+        bool(regime_cfg["use_atr"])
+        if regime_cfg.get("use_atr") is not None
+        else bool(state.get("use_atr"))
+    )
     sl_dist, tp_dist = compute_bracket_distances(
         profile=profile,
         atr_14=atr_14,
-        use_atr=bool(state.get("use_atr")),
-        sl_pips=_safe_float(state.get("sl_pips")),
-        tp_pips=_safe_float(state.get("tp_pips")),
+        use_atr=effective_use_atr,
+        sl_pips=effective_sl_pips,
+        tp_pips=effective_tp_pips,
     )
     macro_assessment_dict = state.get("macro_assessment") or {}
     gotobi_session = macro_assessment_dict.get("gotobi_session")

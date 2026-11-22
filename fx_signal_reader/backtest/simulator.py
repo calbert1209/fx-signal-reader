@@ -775,6 +775,7 @@ def run_backtest(
             tp_pips=effective_config.tp_pips,
             use_atr=effective_config.use_atr,
             allowed_regimes=[r.value for r in effective_config.allowed_regimes],
+            regime_overrides=effective_config.regime_overrides,
         )
         final_state = graph.invoke(
             initial_state,

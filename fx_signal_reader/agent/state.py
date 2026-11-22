@@ -8,7 +8,10 @@ with `operator.add` reducer support on `audit_log`, and state helper utilities.
 """
 
 from enum import Enum
+import json
+import math
 import operator
+from pathlib import Path
 from typing import Annotated, Any, Mapping, TypedDict
 import uuid
 
@@ -168,6 +171,119 @@ class AgentState(TypedDict):
     tp_pips: float | None
     use_atr: bool | None
     allowed_regimes: list[str] | None
+    regime_overrides: dict[str, dict[str, Any]] | None
+
+
+_ALLOWED_REGIME_OVERRIDE_KEYS: frozenset[str] = frozenset(
+    {"risk_fraction", "risk_pct", "sl_pips", "tp_pips", "use_atr"}
+)
+
+
+def _require_positive_float_override(value: Any, field_name: str) -> float:
+    """Validate a finite, strictly positive non-boolean float override value."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field_name} must be a positive number.")
+    fval = float(value)
+    if not math.isfinite(fval) or fval <= 0.0:
+        raise ValueError(f"{field_name} must be finite and > 0.")
+    return fval
+
+
+def normalize_regime_overrides(
+    raw: Mapping[str, Any] | None,
+) -> dict[str, dict[str, Any]] | None:
+    """Validate and normalize per-regime sizing and bracket overrides.
+
+    Keys must match ``RiskRegime`` names (case-insensitive). Supported per-regime
+    fields are ``risk_fraction`` (or ``risk_pct``), ``sl_pips``, ``tp_pips``, and
+    ``use_atr``.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise ValueError("regime_overrides must be a mapping of RiskRegime -> override dict.")
+
+    normalized: dict[str, dict[str, Any]] = {}
+    for raw_regime, raw_cfg in raw.items():
+        if not isinstance(raw_regime, str) or not raw_regime.strip():
+            raise ValueError("regime_overrides keys must be non-empty RiskRegime names.")
+        try:
+            regime_key = RiskRegime(raw_regime.strip().upper()).value
+        except ValueError as exc:
+            raise ValueError(f"Unknown risk regime in regime_overrides: {raw_regime!r}") from exc
+
+        if not isinstance(raw_cfg, Mapping):
+            raise ValueError(f"regime_overrides[{regime_key!r}] must be a mapping.")
+
+        unknown_keys = set(raw_cfg.keys()) - _ALLOWED_REGIME_OVERRIDE_KEYS
+        if unknown_keys:
+            raise ValueError(
+                f"Unsupported keys in regime_overrides[{regime_key!r}]: {sorted(unknown_keys)}"
+            )
+
+        entry: dict[str, Any] = {}
+        if "risk_fraction" in raw_cfg and raw_cfg["risk_fraction"] is not None:
+            rf = _require_positive_float_override(
+                raw_cfg["risk_fraction"], f"regime_overrides[{regime_key}].risk_fraction"
+            )
+            if rf > 1.0:
+                raise ValueError(
+                    f"regime_overrides[{regime_key}].risk_fraction must be <= 1.0."
+                )
+            entry["risk_fraction"] = rf
+        elif "risk_pct" in raw_cfg and raw_cfg["risk_pct"] is not None:
+            rp = _require_positive_float_override(
+                raw_cfg["risk_pct"], f"regime_overrides[{regime_key}].risk_pct"
+            )
+            if rp > 100.0:
+                raise ValueError(
+                    f"regime_overrides[{regime_key}].risk_pct must be <= 100.0."
+                )
+            entry["risk_fraction"] = rp / 100.0
+
+        for pip_field in ("sl_pips", "tp_pips"):
+            if pip_field in raw_cfg and raw_cfg[pip_field] is not None:
+                entry[pip_field] = _require_positive_float_override(
+                    raw_cfg[pip_field], f"regime_overrides[{regime_key}].{pip_field}"
+                )
+
+        if "use_atr" in raw_cfg and raw_cfg["use_atr"] is not None:
+            if not isinstance(raw_cfg["use_atr"], bool):
+                raise ValueError(
+                    f"regime_overrides[{regime_key}].use_atr must be a boolean."
+                )
+            entry["use_atr"] = raw_cfg["use_atr"]
+
+        if entry:
+            normalized[regime_key] = entry
+
+    return normalized or None
+
+
+def parse_regime_overrides_arg(raw: str | Mapping[str, Any] | None) -> dict[str, dict[str, Any]] | None:
+    """Parse ``--regime-overrides`` from a JSON string, file path, or mapping."""
+    if raw is None:
+        return None
+    if isinstance(raw, Mapping):
+        return normalize_regime_overrides(raw)
+    if not isinstance(raw, str):
+        raise ValueError("regime_overrides argument must be a JSON string, file path, or mapping.")
+    text = raw.strip()
+    if not text:
+        return None
+    if not text.startswith("{"):
+        candidate = Path(text)
+        if candidate.is_file():
+            text = candidate.read_text(encoding="utf-8").strip()
+        else:
+            raise ValueError(
+                f"regime_overrides must be a JSON object string or existing .json file path (got {raw!r})."
+            )
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in regime_overrides: {exc}") from exc
+    return normalize_regime_overrides(parsed)
 
 
 def create_initial_state(
@@ -179,6 +295,7 @@ def create_initial_state(
     tp_pips: float | None = None,
     use_atr: bool | None = None,
     allowed_regimes: list[str] | None = None,
+    regime_overrides: Mapping[str, Any] | None = None,
     pair: str = "USD/JPY",
 ) -> AgentState:
     """
@@ -227,6 +344,7 @@ def create_initial_state(
         tp_pips=float(tp_pips) if tp_pips is not None else None,
         use_atr=bool(use_atr) if use_atr is not None else None,
         allowed_regimes=list(allowed_regimes) if allowed_regimes is not None else None,
+        regime_overrides=normalize_regime_overrides(regime_overrides),
     )
 
 

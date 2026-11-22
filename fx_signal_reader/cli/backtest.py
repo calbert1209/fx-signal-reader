@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from fx_signal_reader.agent.state import parse_regime_overrides_arg
 from fx_signal_reader.backtest import (
     DEFAULT_BACKTEST_DB_PATH,
     BacktestConfig,
@@ -121,6 +122,8 @@ def format_backtest_summary(
         ),
         f"Strategy           : regimes={regimes_str} | risk={cfg.risk_fraction * 100:.1f}% | brackets={bracket_str} | breakeven={be_str}",
     ]
+    if cfg.regime_overrides:
+        lines.append(f"Regime Overrides   : {json.dumps(cfg.regime_overrides, sort_keys=True)}")
 
     if backfill_summary is not None:
         lines.append(
@@ -278,7 +281,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--risk-pct",
         type=float,
         default=None,
-        help="Account risk percentage per trade (e.g. 2.0 for 2.0%; default: 1.0%).",
+        help="Account risk percentage per trade (e.g. 2.0 for 2.0%%; default: 1.0%%).",
     )
     parser.add_argument(
         "--allowed-regimes",
@@ -313,6 +316,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--use-atr",
         action="store_true",
         help="Enable dynamic ATR-14 Stop Loss (1.0x ATR) and Take Profit (2.0x ATR) brackets.",
+    )
+    parser.add_argument(
+        "--regime-overrides",
+        type=str,
+        default=None,
+        help="Optional JSON object string or .json file path mapping RiskRegime to {risk_pct|risk_fraction, sl_pips, tp_pips, use_atr}.",
     )
     parser.add_argument(
         "--json",
@@ -366,6 +375,8 @@ def main(argv: list[str] | None = None) -> int:
         config_kwargs["tp_pips"] = args.tp_pips
     if args.risk_pct is not None:
         config_kwargs["risk_fraction"] = args.risk_pct / 100.0
+    if args.regime_overrides is not None:
+        config_kwargs["regime_overrides"] = parse_regime_overrides_arg(args.regime_overrides)
 
     config = BacktestConfig(**config_kwargs)
     report = run_backtest(db_path=target_db, config=config)

@@ -27,7 +27,7 @@ from fx_signal_reader.agent.graph import (
     build_signal_graph,
     resume_with_decision,
 )
-from fx_signal_reader.agent.state import create_initial_state
+from fx_signal_reader.agent.state import create_initial_state, parse_regime_overrides_arg
 from fx_signal_reader.core.pair_profile import get_pair_db_path, get_pair_profile
 from fx_signal_reader.notifications import (
     DEFAULT_SETTINGS_PATH,
@@ -99,6 +99,7 @@ def run_signal_pipeline(
     telegram_timeout: int | None = None,
     telegram_notifier: Any | None = None,
     allowed_regimes: str | list[str] | None = None,
+    regime_overrides: str | dict[str, Any] | None = None,
     sl_pips: float | None = None,
     tp_pips: float | None = None,
     use_atr: bool = False,
@@ -115,6 +116,7 @@ def run_signal_pipeline(
         db_path = str(get_pair_db_path(profile))
 
     parsed_regimes = _parse_allowed_regimes(allowed_regimes)
+    parsed_overrides = parse_regime_overrides_arg(regime_overrides)
 
     resolved_thread = thread_id.strip() if thread_id and thread_id.strip() else f"run-{uuid.uuid4().hex[:12]}"
     resolved_ledger = Path(ledger_path) if ledger_path is not None else DEFAULT_LEDGER_PATH
@@ -132,6 +134,7 @@ def run_signal_pipeline(
         tp_pips=tp_pips,
         use_atr=True if use_atr else None,
         allowed_regimes=parsed_regimes,
+        regime_overrides=parsed_overrides,
     )
 
     final_state = graph.invoke(initial_state, config=config)
@@ -347,6 +350,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Enable dynamic ATR-14 Stop Loss (1.0x ATR) and Take Profit (2.0x ATR) brackets.",
     )
     parser.add_argument(
+        "--regime-overrides",
+        type=str,
+        default=None,
+        help="Optional JSON object string or .json file path mapping RiskRegime to {risk_pct|risk_fraction, sl_pips, tp_pips, use_atr}.",
+    )
+    parser.add_argument(
         "--telegram",
         action="store_true",
         help="Route actionable trade proposals to Telegram for remote inline-button approval.",
@@ -459,6 +468,7 @@ def main(argv: list[str] | None = None) -> int:
         telegram=args.telegram,
         telegram_timeout=args.telegram_timeout,
         allowed_regimes=args.allowed_regimes,
+        regime_overrides=args.regime_overrides,
         sl_pips=args.sl_pips,
         tp_pips=args.tp_pips,
         use_atr=args.use_atr,

@@ -15,7 +15,12 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
-from fx_signal_reader.agent.state import RiskRegime, TradeAction, YieldBias
+from fx_signal_reader.agent.state import (
+    RiskRegime,
+    TradeAction,
+    YieldBias,
+    normalize_regime_overrides,
+)
 from fx_signal_reader.core.normalizer import normalize_datetime_utc
 
 
@@ -89,6 +94,7 @@ class BacktestConfig(BaseModel):
     allowed_regimes: list[RiskRegime] = Field(
         default_factory=lambda: [RiskRegime.RISK_ON, RiskRegime.TRANSITIONAL]
     )
+    regime_overrides: dict[str, dict[str, Any]] | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -150,6 +156,11 @@ class BacktestConfig(BaseModel):
                 seen.add(regime)
                 normalized.append(regime)
         return normalized
+
+    @field_validator("regime_overrides", mode="before")
+    @classmethod
+    def _validate_regime_overrides(cls, value: Any) -> dict[str, dict[str, Any]] | None:
+        return normalize_regime_overrides(value)
 
     @model_validator(mode="after")
     def _validate_date_order(self) -> BacktestConfig:
