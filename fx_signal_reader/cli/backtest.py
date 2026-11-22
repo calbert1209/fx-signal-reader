@@ -11,7 +11,10 @@ import csv
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+import yaml
 
 from fx_signal_reader.agent.state import parse_regime_overrides_arg
 from fx_signal_reader.backtest import (
@@ -23,6 +26,85 @@ from fx_signal_reader.backtest import (
 )
 from fx_signal_reader.core.pair_profile import get_pair_db_path, get_pair_profile
 from fx_signal_reader.mcp.server import resolve_db_path
+
+
+class BacktestCLIConfig(BaseModel):
+    """Strict schema for JSON/YAML ``fx-backtest --config`` files."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    pair: str | None = None
+    db_path: str | None = None
+    backfill: bool | None = None
+    interval: Literal["15m", "1h", "1d"] | None = None
+    start: str | None = None
+    end: str | None = None
+    step_hours: int | None = None
+    max_hold_hours: int | None = None
+    spread_pips: float | None = None
+    allow_overlap: bool | None = None
+    optimistic_tie_break: bool | None = None
+    mof_lookback_hours: int | None = None
+    initial_capital: float | None = None
+    risk_pct: float | None = None
+    risk_fraction: float | None = None
+    allowed_regimes: str | list[str] | None = None
+    breakeven_r: float | None = None
+    no_breakeven: bool | None = None
+    sl_pips: float | None = None
+    tp_pips: float | None = None
+    use_atr: bool | None = None
+    regime_overrides: dict[str, dict[str, Any]] | str | None = None
+    json_output: bool | None = Field(default=None, alias="json")
+    export_trades: str | None = None
+
+    @model_validator(mode="after")
+    def _reject_conflicting_risk(self) -> BacktestCLIConfig:
+        if self.risk_pct is not None and self.risk_fraction is not None:
+            raise ValueError("Specify either 'risk_pct' or 'risk_fraction', not both.")
+        return self
+
+
+def load_backtest_config_file(config_path: str | Path) -> dict[str, Any]:
+    """Load and validate a JSON or YAML config file into argparse default overrides."""
+    path = Path(config_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Config file not found: {path}")
+
+    raw_text = path.read_text(encoding="utf-8")
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        try:
+            loaded = json.loads(raw_text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid JSON in config file {path}: {exc}") from exc
+    elif suffix in {".yaml", ".yml"}:
+        try:
+            loaded = yaml.safe_load(raw_text)
+        except yaml.YAMLError as exc:
+            raise ValueError(f"Invalid YAML in config file {path}: {exc}") from exc
+    else:
+        raise ValueError(
+            f"Unsupported config file extension {path.suffix!r}; expected .json, .yaml, or .yml."
+        )
+
+    if loaded is None:
+        return {}
+    if not isinstance(loaded, dict):
+        raise ValueError(f"Config file {path} must contain a top-level mapping/object.")
+
+    validated = BacktestCLIConfig.model_validate(loaded)
+    defaults: dict[str, Any] = {}
+    for field_name, val in validated.model_dump(exclude_none=True).items():
+        if field_name == "risk_fraction":
+            defaults["risk_pct"] = float(val) * 100.0
+        elif field_name == "json_output":
+            defaults["json"] = bool(val)
+        elif field_name == "allowed_regimes" and isinstance(val, list):
+            defaults["allowed_regimes"] = ",".join(str(v).strip() for v in val if str(v).strip())
+        else:
+            defaults[field_name] = val
+    return defaults
 
 
 def _resolve_target_db(
@@ -200,6 +282,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="Run historical point-in-time backtesting for the FX Signal Reader pipeline."
     )
     parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Optional path to a .json, .yaml, or .yml configuration file (CLI flags override config values).",
+    )
+    parser.add_argument(
         "--pair",
         type=str,
         default=os.getenv("FX_PAIR", "USD/JPY"),
@@ -339,7 +427,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint for `fx-backtest`."""
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", type=str, default=None)
+    pre_args, _ = pre_parser.parse_known_args(argv)
+
     parser = build_arg_parser()
+    if pre_args.config:
+        config_defaults = load_backtest_config_file(pre_args.config)
+        parser.set_defaults(**config_defaults)
+
     args = parser.parse_args(argv)
 
     target_db = _resolve_target_db(args.db_path, backfill=args.backfill, pair=args.pair)

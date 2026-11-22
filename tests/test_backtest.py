@@ -360,6 +360,75 @@ class TestBacktestCLI(unittest.TestCase):
             self.assertEqual(p_args.tp_pips, 160.0)
             self.assertTrue(p_args.use_atr)
 
+    def test_cli_config_file_yaml_json_and_precedence(self) -> None:
+        from fx_signal_reader.cli import backtest as backtest_cli
+
+        with tempfile.TemporaryDirectory(prefix="fx_bt_cfg_") as tmpdir:
+            tmp = Path(tmpdir)
+            db_path = _build_replay_db(tmp / "sample.db")
+
+            yaml_cfg = tmp / "bt.yaml"
+            yaml_cfg.write_text(
+                "\n".join(
+                    [
+                        "pair: USD/JPY",
+                        f"db_path: {db_path}",
+                        "step_hours: 8",
+                        "allowed_regimes:",
+                        "  - RISK_ON",
+                        "  - TRANSITIONAL",
+                        "no_breakeven: true",
+                        "regime_overrides:",
+                        "  RISK_ON:",
+                        "    risk_pct: 1.0",
+                        "    sl_pips: 80",
+                        "    tp_pips: 160",
+                        "json: true",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            # CLI --step-hours 4 overrides YAML step_hours: 8
+            stdout_buf = io.StringIO()
+            with contextlib.redirect_stdout(stdout_buf):
+                rc = backtest_cli.main(["--config", str(yaml_cfg), "--step-hours", "4"])
+            self.assertEqual(rc, 0)
+            payload = json.loads(stdout_buf.getvalue())
+            self.assertEqual(payload["config"]["step_hours"], 4)
+            self.assertEqual(payload["config"]["allowed_regimes"], ["RISK_ON", "TRANSITIONAL"])
+            self.assertIsNone(payload["config"]["breakeven_trigger_r"])
+            self.assertAlmostEqual(
+                payload["config"]["regime_overrides"]["RISK_ON"]["risk_fraction"], 0.01
+            )
+
+            # JSON config file also works
+            json_cfg = tmp / "bt.json"
+            json_cfg.write_text(
+                json.dumps(
+                    {
+                        "db_path": str(db_path),
+                        "step_hours": 12,
+                        "risk_fraction": 0.02,
+                        "json": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout_json = io.StringIO()
+            with contextlib.redirect_stdout(stdout_json):
+                rc_j = backtest_cli.main(["--config", str(json_cfg)])
+            self.assertEqual(rc_j, 0)
+            payload_j = json.loads(stdout_json.getvalue())
+            self.assertEqual(payload_j["config"]["step_hours"], 12)
+            self.assertAlmostEqual(payload_j["config"]["risk_fraction"], 0.02)
+
+            # Unknown keys fail fast
+            bad_cfg = tmp / "bad.yaml"
+            bad_cfg.write_text("unknown_key: 123\n", encoding="utf-8")
+            with self.assertRaises(Exception):
+                backtest_cli.load_backtest_config_file(bad_cfg)
+
 
 if __name__ == "__main__":
     unittest.main()
