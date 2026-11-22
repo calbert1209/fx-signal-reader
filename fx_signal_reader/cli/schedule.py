@@ -36,11 +36,21 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from fx_signal_reader.agent.graph import DEFAULT_LEDGER_PATH
+from fx_signal_reader.cli.pipeline import evaluate_readonly_state, run_signal_pipeline
 from fx_signal_reader.collectors.calendar import CalendarCollector
 from fx_signal_reader.collectors.market_ticks import MarketTicksCollector
 from fx_signal_reader.collectors.news_rss import NewsRSSCollector
 from fx_signal_reader.core import DEFAULT_DB_PATH, DEFAULT_SCHEMA_PATH
 from fx_signal_reader.core.pair_profile import PairProfile, get_pair_db_path, get_pair_profile
+from fx_signal_reader.notifications import (
+    DEFAULT_SUMMARY_TIME_JST,
+    TelegramConfig,
+    TelegramNotifier,
+    TelegramSettings,
+    format_daily_summary,
+    parse_jst_time,
+)
 
 # Configure structured logging
 logging.basicConfig(
@@ -196,6 +206,28 @@ def calculate_next_calendar_run(
         return now + timedelta(seconds=interval_sec)
 
 
+def calculate_next_summary_run_utc(
+    now_utc: datetime,
+    target_time_jst: str = DEFAULT_SUMMARY_TIME_JST,
+) -> datetime:
+    """
+    Calculates the next daily summary execution timestamp in UTC from a 24-hour JST time string
+    (e.g. '09:00', '07:30', '14:30').
+    """
+    normalized_jst = parse_jst_time(target_time_jst)
+    hour_str, minute_str = normalized_jst.split(":")
+    now_jst = normalize_to_utc(now_utc).astimezone(JST)
+    candidate_jst = now_jst.replace(
+        hour=int(hour_str),
+        minute=int(minute_str),
+        second=0,
+        microsecond=0,
+    )
+    if candidate_jst <= now_jst:
+        candidate_jst += timedelta(days=1)
+    return candidate_jst.astimezone(UTC)
+
+
 @dataclass
 class JobSchedule:
     """Tracks state and scheduling metadata for an individual collector job."""
@@ -229,6 +261,10 @@ class SchedulerConfig:
     calendar_utc_hour: int = 0
     calendar_utc_minute: int = 5
     enable_tokyo_fix_expedited: bool = True
+    telegram: bool = False
+    run_pipeline: bool = False
+    summary_time_jst: str = DEFAULT_SUMMARY_TIME_JST
+    ledger_path: Path = field(default_factory=lambda: DEFAULT_LEDGER_PATH)
     dry_run: bool = False
     run_once: bool = False
     retries: int = 3
@@ -255,6 +291,11 @@ class SchedulerConfig:
         env_calendar = parse_interval(os.getenv("INTERVAL_CALENDAR"), 86400)
         env_tokyo_fix = parse_interval(os.getenv("INTERVAL_TOKYO_FIX"), 60)
         env_cal_time = os.getenv("CALENDAR_TIME_UTC", "00:05")
+        raw_summary_jst = os.getenv("TELEGRAM_SUMMARY_TIME_JST", DEFAULT_SUMMARY_TIME_JST)
+        try:
+            env_summary_jst = parse_jst_time(raw_summary_jst)
+        except ValueError:
+            env_summary_jst = DEFAULT_SUMMARY_TIME_JST
 
         hour, minute = 0, 5
         if ":" in env_cal_time:
@@ -273,6 +314,7 @@ class SchedulerConfig:
             tokyo_fix_interval=env_tokyo_fix,
             calendar_utc_hour=hour,
             calendar_utc_minute=minute,
+            summary_time_jst=env_summary_jst,
         )
 
         # Override with CLI arguments if provided
@@ -296,6 +338,15 @@ class SchedulerConfig:
                     cfg.calendar_utc_minute = int(mp)
                 except ValueError:
                     pass
+            if getattr(args, "summary_time_jst", None):
+                try:
+                    cfg.summary_time_jst = parse_jst_time(args.summary_time_jst)
+                except ValueError:
+                    pass
+            if getattr(args, "telegram", False):
+                cfg.telegram = True
+            if getattr(args, "run_pipeline", False):
+                cfg.run_pipeline = True
             if getattr(args, "no_expedited_fix", False):
                 cfg.enable_tokyo_fix_expedited = False
             if getattr(args, "dry_run", False):
@@ -317,12 +368,25 @@ class SignalScheduler:
     and collector job dispatching.
     """
 
-    def __init__(self, config: Optional[SchedulerConfig] = None) -> None:
+    def __init__(
+        self,
+        config: Optional[SchedulerConfig] = None,
+        *,
+        telegram_notifier: Any | None = None,
+    ) -> None:
         self.config = config or SchedulerConfig()
         self.jobs: Dict[str, JobSchedule] = {}
         self._shutdown_requested = False
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
+        if telegram_notifier is not None:
+            self.telegram_notifier: Any | None = telegram_notifier
+        elif self.config.telegram:
+            self.telegram_notifier = TelegramNotifier(
+                TelegramConfig.from_env(summary_time_jst=self.config.summary_time_jst)
+            )
+        else:
+            self.telegram_notifier = None
 
         if self.config.verbose:
             logger.setLevel(logging.DEBUG)
@@ -605,7 +669,97 @@ class SignalScheduler:
                 f"{n_res.get('flagged_intervention_rows')} policy/intervention signals flagged"
             )
         print("=" * 80)
+        if self.config.run_pipeline and not self.config.dry_run:
+            results["pipeline"] = self.run_pipeline_evaluation()
+        if self.telegram_notifier is not None:
+            results["telegram"] = self.poll_telegram_commands_and_summary(start_utc)
         return results
+
+    def _build_summary_state(self) -> Dict[str, Any]:
+        """Evaluate current market state in read-only mode for summary generation."""
+        if self.config.dry_run:
+            return {
+                "pair": self.config.pair,
+                "spot_price": 152.00 if self.config.pair == "USD/JPY" else 1.0800,
+                "yield_bias": "NEUTRAL",
+                "risk_regime": "TRANSITIONAL",
+            }
+        return evaluate_readonly_state(
+            pair=self.config.pair,
+            db_path=str(self.config.db_path),
+        )
+
+    def evaluate_summary_text(self, settings: TelegramSettings) -> str:
+        """Callback invoked when a user sends `/summary now` to generate a fresh summary."""
+        state = self._build_summary_state()
+        return format_daily_summary(
+            state,
+            ledger_path=self.config.ledger_path,
+            settings=settings,
+        )
+
+    def poll_telegram_commands_and_summary(
+        self,
+        now_utc: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        """
+        Poll Telegram for `/summary on [HH:MM]`, `/summary off`, or `/summary now` commands,
+        and send the scheduled daily summary if due in JST and enabled.
+        """
+        notifier = self.telegram_notifier
+        if notifier is None:
+            return {"commands_handled": [], "daily_summary_sent": False}
+
+        now = normalize_to_utc(now_utc)
+        commands = notifier.poll_commands(
+            poll_timeout=0,
+            summary_provider=self.evaluate_summary_text,
+        )
+
+        daily_sent = False
+        if notifier.settings.daily_summary_enabled:
+            now_jst = now.astimezone(JST)
+            today_jst_str = now_jst.strftime("%Y-%m-%d")
+            target_time_str = parse_jst_time(notifier.settings.daily_summary_time_jst)
+            target_h, target_m = map(int, target_time_str.split(":"))
+            target_dt_jst = now_jst.replace(
+                hour=target_h,
+                minute=target_m,
+                second=0,
+                microsecond=0,
+            )
+            if (
+                now_jst >= target_dt_jst
+                and notifier.settings.last_summary_sent_jst_date != today_jst_str
+            ):
+                state = self._build_summary_state()
+                notifier.send_daily_summary(
+                    state,
+                    ledger_path=self.config.ledger_path,
+                    mark_sent_date=today_jst_str,
+                )
+                daily_sent = True
+
+        return {
+            "commands_handled": commands,
+            "daily_summary_sent": daily_sent,
+            "daily_summary_enabled": notifier.settings.daily_summary_enabled,
+            "daily_summary_time_jst": notifier.settings.daily_summary_time_jst,
+            "next_summary_utc": calculate_next_summary_run_utc(
+                now,
+                notifier.settings.daily_summary_time_jst,
+            ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+
+    def run_pipeline_evaluation(self) -> Dict[str, Any]:
+        """Run the signal pipeline after ticks collection, routing actionable approvals to Telegram if enabled."""
+        return run_signal_pipeline(
+            pair=self.config.pair,
+            db_path=str(self.config.db_path),
+            ledger_path=self.config.ledger_path,
+            telegram=bool(self.telegram_notifier is not None or self.config.telegram),
+            telegram_notifier=self.telegram_notifier,
+        )
 
     def start(self, max_cycles: Optional[int] = None) -> int:
         """
@@ -618,6 +772,12 @@ class SignalScheduler:
         try:
             while not self._shutdown_requested:
                 now = datetime.now(UTC)
+
+                if self.telegram_notifier is not None:
+                    try:
+                        self.poll_telegram_commands_and_summary(now)
+                    except Exception as exc:
+                        logger.warning(f"Telegram command/summary poll failed: {exc}")
 
                 # Check which jobs are due
                 due_jobs: List[str] = [
@@ -632,6 +792,15 @@ class SignalScheduler:
                             break
                         with self._lock:
                             self.run_collector(job_name)
+                            if (
+                                job_name == "ticks"
+                                and self.config.run_pipeline
+                                and not self.config.dry_run
+                            ):
+                                try:
+                                    self.run_pipeline_evaluation()
+                                except Exception as exc:
+                                    logger.error(f"Pipeline evaluation after ticks failed: {exc}")
 
                     cycle_count += 1
                     if max_cycles and cycle_count >= max_cycles:
@@ -714,6 +883,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=str,
         default=os.getenv("CALENDAR_TIME_UTC", "00:05"),
         help="Target time of day in UTC for daily calendar polling (format: HH:MM, default: 00:05)",
+    )
+    parser.add_argument(
+        "--telegram",
+        action="store_true",
+        help="Enable Telegram command polling (/summary on [HH:MM], /summary off, /summary now), daily summary delivery, and remote trade approvals",
+    )
+    parser.add_argument(
+        "--run-pipeline",
+        action="store_true",
+        help="Automatically evaluate the LangGraph signal pipeline after each market ticks collection cycle",
+    )
+    parser.add_argument(
+        "--summary-time-jst",
+        type=str,
+        default=os.getenv("TELEGRAM_SUMMARY_TIME_JST", DEFAULT_SUMMARY_TIME_JST),
+        help="Default daily summary delivery time in 24-hour JST format (H:MM or HH:MM, default: 09:00)",
     )
     parser.add_argument(
         "--no-expedited-fix",

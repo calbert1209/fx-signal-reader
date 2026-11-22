@@ -171,6 +171,12 @@ External agent harnesses (such as AutoGen, CrewAI, or shell tools) can invoke th
 # Evaluate USD/JPY with auto-approval
 .venv/bin/fx-pipeline --pair USD/JPY --auto-approve --json
 
+# Evaluate USD/JPY with remote Telegram inline-button approval
+.venv/bin/fx-pipeline --pair USD/JPY --telegram --telegram-timeout 300 --json
+
+# Send an immediate on-demand summary (including Summary Settings footer) to Telegram
+.venv/bin/fx-pipeline --pair USD/JPY --telegram-summary --json
+
 # Evaluate EUR/USD with dynamic ATR brackets
 .venv/bin/fx-pipeline --pair EUR/USD --use-atr --allowed-regimes RISK_ON --json
 ```

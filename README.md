@@ -93,6 +93,10 @@ Key environment variables in `.env`:
 - `POLL_INTERVAL_NEWS`: News RSS polling interval in seconds (default: `300`).
 - `POLL_INTERVAL_TICKS`: Market tick polling interval in seconds (default: `900`).
 - `POLL_INTERVAL_CALENDAR`: Economic calendar polling interval in seconds (default: `86400`).
+- `TELEGRAM_BOT_TOKEN`: Optional Telegram Bot HTTP API token from `@BotFather` for remote mobile trade approvals and daily summaries.
+- `TELEGRAM_CHAT_ID`: Authorized Telegram chat ID permitted to receive notifications, approve/reject trades, and run `/summary` commands.
+- `TELEGRAM_APPROVAL_TIMEOUT`: Seconds to wait for a Telegram button tap before auto-rejecting an actionable trade proposal (default: `300`).
+- `TELEGRAM_SUMMARY_TIME_JST`: Default daily summary schedule in 24-hour JST format (default: `09:00`; persisted in `data/telegram_settings.json`).
 
 ---
 
@@ -148,11 +152,27 @@ fx-pipeline --pair EUR/USD
 
 Approval gate controls:
 - **Interactive TTY:** Prompts for reviewer approval or rejection on actionable signals.
+- `--telegram`: Sends actionable `BUY`/`SELL` proposals to your Telegram app with inline **[ ✅ Approve ]** and **[ ❌ Reject ]** buttons, long-polls for your decision (up to `--telegram-timeout`), resumes the LangGraph checkpoint, records approved trades to `data/paper_trades.jsonl`, and updates the Telegram message with the final execution receipt.
+- `--telegram-test`: Verifies `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` connectivity (auto-discovering `chat_id` if you recently messaged the bot) and exits.
+- `--telegram-summary`: Immediately evaluates the market & paper ledger and sends a summary digest (including current summary settings) to Telegram.
 - `--auto-approve`: Automatically approves actionable trade proposals and records execution to `data/paper_trades.jsonl`.
 - `--reject`: Rejects actionable proposals without execution.
 - `--json`: Outputs structured JSON results for programmatic consumption.
 - `--sl-pips` / `--tp-pips`: Custom fixed Stop Loss and Take Profit distances in pips.
 - `--use-atr`: Dynamic ATR-14 volatility-scaled brackets.
+
+#### Remote Telegram Setup & `/summary` Commands
+1. Message **`@BotFather`** on Telegram with `/newbot` to obtain your `TELEGRAM_BOT_TOKEN`.
+2. Open a chat with your new bot, send `hello`, and set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env` (run `fx-pipeline --telegram-test` to verify connectivity).
+3. Run continuous scheduling with Telegram remote approvals and daily summaries:
+   ```bash
+   fx-schedule --pair USD/JPY --telegram --run-pipeline
+   ```
+4. Control your daily market & portfolio summary anytime from your phone by messaging your bot:
+   - `/summary on` — Enables the daily summary and schedules it for the default **`09:00` JST** (9:00 AM JST).
+   - `/summary on 7:30` or `/summary on 14:30` — Enables and schedules the daily summary for **`07:30` JST** (7:30 AM) or **`14:30` JST** (2:30 PM) in 24-hour JST time.
+   - `/summary off` — Disables the daily scheduled summary (persisted in `data/telegram_settings.json`).
+   - `/summary now` — Immediately evaluates and sends an on-demand summary at any time (even when the daily schedule is `off`). Every scheduled or on-demand summary includes a **Summary Settings** footer displaying current toggle status (`ON`/`OFF`) and JST delivery time.
 
 ### 4. Historical Backtesting (`fx-backtest`)
 
