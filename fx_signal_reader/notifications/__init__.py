@@ -7,6 +7,7 @@ from fx_signal_reader.notifications.client import (
 from fx_signal_reader.notifications.formatters import (
     build_approval_inline_keyboard,
     format_daily_summary,
+    format_execution_alert,
     format_execution_update,
     format_proposal_message,
     format_summary_settings_block,
@@ -32,6 +33,7 @@ __all__ = [
     "TelegramSettings",
     "build_approval_inline_keyboard",
     "format_daily_summary",
+    "format_execution_alert",
     "format_execution_update",
     "format_proposal_message",
     "format_summary_settings_block",

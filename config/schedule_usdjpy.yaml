@@ -1,0 +1,26 @@
+# Production Tiered Scheduler Configuration for USD/JPY
+# Run with: fx-schedule --config config/schedule_usdjpy.yaml
+
+pair: USD/JPY
+run_pipeline: true
+auto_approve: true
+telegram: true
+summary_time_jst: "09:00"
+
+# Tiered polling cadences (seconds)
+interval_news: 300        # 5 minutes
+interval_ticks: 900       # 15 minutes (expedited to 60s during Tokyo Fix)
+interval_calendar: 86400  # Daily
+interval_tokyo_fix: 60
+calendar_time_utc: "00:05"
+
+# 5-Year Fine-Tuned Asymmetrical Regime Overrides
+regime_overrides:
+  RISK_ON:
+    risk_pct: 1.0
+    sl_pips: 80
+    tp_pips: 160
+  TRANSITIONAL:
+    risk_pct: 4.0
+    sl_pips: 120
+    tp_pips: 240

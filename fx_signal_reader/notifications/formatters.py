@@ -331,6 +331,74 @@ def format_execution_update(
     return base_text + "\n" + "\n".join(footer_lines)
 
 
+def format_execution_alert(
+    state: dict[str, Any],
+    receipt: dict[str, Any],
+) -> str:
+    """
+    Format a standalone fire-and-forget Telegram alert for an automatically executed
+    paper trade (e.g., via ``--auto-approve``).
+
+    Args:
+        state: Shared LangGraph AgentState dictionary.
+        receipt: ExecutionReceipt dictionary (or model) from ``paper_execution_node``.
+
+    Returns:
+        Formatted plain-text execution alert string.
+    """
+    state_dict = _coerce_mapping(state)
+    receipt_dict = _coerce_mapping(receipt)
+    proposal = _coerce_mapping(state_dict.get("trade_proposal"))
+    risk = _coerce_mapping(state_dict.get("risk_assessment"))
+
+    pair = (
+        _enum_or_str(receipt_dict.get("pair"), default="")
+        or _enum_or_str(state_dict.get("pair"), default="")
+        or "USD/JPY"
+    )
+    action = _enum_or_str(receipt_dict.get("action"), default="HOLD")
+    action_icon = "🟢" if action == "BUY" else "🔴" if action == "SELL" else "⚪"
+
+    units_raw = receipt_dict.get("position_size_units")
+    units = int(units_raw) if isinstance(units_raw, (int, float)) else (units_raw if units_raw is not None else 0)
+
+    fill_price = receipt_dict.get("fill_price")
+    stop_loss = receipt_dict.get("stop_loss") if receipt_dict.get("stop_loss") is not None else proposal.get("stop_loss")
+    take_profit = receipt_dict.get("take_profit") if receipt_dict.get("take_profit") is not None else proposal.get("take_profit")
+    order_id = _enum_or_str(receipt_dict.get("order_id"), default="N/A")
+    executed_at_utc = _enum_or_str(receipt_dict.get("executed_at_utc"), default="")
+    risk_regime = _enum_or_str(
+        state_dict.get("risk_regime")
+        or risk.get("risk_regime")
+        or proposal.get("risk_regime"),
+        default="TRANSITIONAL",
+    )
+    rr_ratio = proposal.get("risk_reward_ratio")
+    rationale = _enum_or_str(proposal.get("rationale"), default="")
+
+    lines: list[str] = [
+        f"⚡ Automated Paper Trade Executed ({pair})",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"• Action        : {action_icon} {action} {units} {pair}",
+        f"• Fill Price    : {_fmt_number(fill_price)}",
+        f"• Stop Loss     : {_fmt_number(stop_loss)}",
+        f"• Take Profit   : {_fmt_number(take_profit)}",
+    ]
+    if rr_ratio is not None:
+        lines.append(f"• R:R Ratio     : {_fmt_number(rr_ratio, decimals=2)}")
+    lines.extend(
+        [
+            f"• Risk Regime   : {risk_regime}",
+            f"• Order ID      : {order_id}",
+        ]
+    )
+    if executed_at_utc:
+        lines.append(f"• Executed (UTC): {executed_at_utc}")
+    if rationale:
+        lines.extend(["", "📝 Rationale", rationale])
+    return "\n".join(lines)
+
+
 def format_summary_settings_block(settings: Any | dict[str, Any] | None = None) -> str:
     """
     Format the mandatory Summary Settings footer included at the bottom of every

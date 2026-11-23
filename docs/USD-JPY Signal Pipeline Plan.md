@@ -107,6 +107,10 @@ The architecture is designed to run locally with minimal cloud dependencies, com
 - [x] **P10-04 (Pipeline CLI & Tiered Scheduler Telegram Integration):** Wire `--telegram`, `--telegram-timeout`, `--telegram-test`, and `--telegram-summary` into `fx-pipeline`, and integrate command polling, dynamic JST daily summary scheduling, and `--run-pipeline` into `fx-schedule`. *(Downstream Track D)*
 - [x] **P10-05 (Telegram Test Suite, Configuration & Documentation):** Build `tests/test_telegram_approval.py`, update `.env.example`, `README.md`, `AGENTS.md`, `docs/AGENT_GUIDE.md`, and `USD-JPY Signal Pipeline Plan.md`, and verify the full `pytest` regression suite. *(Final Track E)*
 
+### Phase 11: Asymmetric Regime Risk & Bracket Configuration
+- [x] **P11-01 (Regime-Specific Risk Sizing & Bracket Overrides):** Add per-regime sizing and bracket overrides across agent, backtest simulator, and CLI flags (`--regime-overrides`, `--config`) with unified 5-year verification (+120.43% net return, 1.7157 PF).
+- [x] **P11-02 (Automated Scheduled Execution with Regime Overrides & Telegram Action Alerts):** Enable hands-free scheduled paper execution in `fx-schedule` with `--auto-approve`, `--regime-overrides`, `--config`, and instant Telegram alerts on auto-executed trades.
+
 ---
 
 ## 5. Current Implementation Status

@@ -20,6 +20,7 @@ from fx_signal_reader.notifications.client import TelegramAPIError, TelegramBotC
 from fx_signal_reader.notifications.formatters import (
     build_approval_inline_keyboard,
     format_daily_summary,
+    format_execution_alert,
     format_execution_update,
     format_proposal_message,
     format_summary_settings_block,
@@ -118,6 +119,15 @@ class TelegramNotifier:
             text=updated_text,
             reply_markup={"inline_keyboard": []},
         )
+
+    def send_execution_alert(
+        self,
+        state: dict[str, Any],
+        receipt: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Send a fire-and-forget Telegram alert when a paper trade is automatically executed."""
+        alert_text = format_execution_alert(state, receipt)
+        return self.client.send_message(alert_text)
 
     def handle_summary_command(
         self,

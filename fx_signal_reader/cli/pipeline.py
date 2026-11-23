@@ -150,6 +150,14 @@ def run_signal_pipeline(
                 reviewer_notes=reviewer_notes or "Auto-approved via CLI --auto-approve.",
             )
             paused = False
+            receipt = final_state.get("execution_receipt") or {}
+            if (telegram or telegram_notifier is not None) and receipt.get("status") == "EXECUTED":
+                notifier = (
+                    telegram_notifier
+                    if telegram_notifier is not None
+                    else TelegramNotifier(TelegramConfig.from_env(timeout_sec=telegram_timeout))
+                )
+                notifier.send_execution_alert(dict(final_state), receipt)
         elif reject:
             final_state = resume_with_decision(
                 graph,

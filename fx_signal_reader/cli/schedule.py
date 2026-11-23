@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass, field
 from datetime import datetime, time as dtime, timedelta, timezone
+import json
 import logging
 import os
 from pathlib import Path
@@ -36,7 +37,11 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from pydantic import BaseModel, ConfigDict
+import yaml
+
 from fx_signal_reader.agent.graph import DEFAULT_LEDGER_PATH
+from fx_signal_reader.agent.state import parse_regime_overrides_arg
 from fx_signal_reader.cli.pipeline import evaluate_readonly_state, run_signal_pipeline
 from fx_signal_reader.collectors.calendar import CalendarCollector
 from fx_signal_reader.collectors.market_ticks import MarketTicksCollector
@@ -247,6 +252,63 @@ class JobSchedule:
         return now >= self.next_run
 
 
+class SchedulerCLIConfig(BaseModel):
+    """Strict schema for JSON/YAML ``fx-schedule --config`` files."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pair: str | None = None
+    run_once: bool | None = None
+    dry_run: bool | None = None
+    db_path: str | None = None
+    schema_path: str | None = None
+    interval_news: int | None = None
+    interval_ticks: int | None = None
+    interval_calendar: int | None = None
+    interval_tokyo_fix: int | None = None
+    calendar_time_utc: str | None = None
+    telegram: bool | None = None
+    run_pipeline: bool | None = None
+    auto_approve: bool | None = None
+    regime_overrides: dict[str, dict[str, Any]] | str | None = None
+    summary_time_jst: str | None = None
+    no_expedited_fix: bool | None = None
+    retries: int | None = None
+    verbose: bool | None = None
+
+
+def load_scheduler_config_file(config_path: str | Path) -> dict[str, Any]:
+    """Load and validate a JSON or YAML config file into argparse default overrides."""
+    path = Path(config_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Config file not found: {path}")
+
+    raw_text = path.read_text(encoding="utf-8")
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        try:
+            loaded = json.loads(raw_text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid JSON in config file {path}: {exc}") from exc
+    elif suffix in {".yaml", ".yml"}:
+        try:
+            loaded = yaml.safe_load(raw_text)
+        except yaml.YAMLError as exc:
+            raise ValueError(f"Invalid YAML in config file {path}: {exc}") from exc
+    else:
+        raise ValueError(
+            f"Unsupported config file extension {path.suffix!r}; expected .json, .yaml, or .yml."
+        )
+
+    if loaded is None:
+        return {}
+    if not isinstance(loaded, dict):
+        raise ValueError(f"Config file {path} must contain a top-level mapping/object.")
+
+    validated = SchedulerCLIConfig.model_validate(loaded)
+    return validated.model_dump(exclude_none=True)
+
+
 @dataclass
 class SchedulerConfig:
     """Scheduler configuration parameters."""
@@ -263,6 +325,8 @@ class SchedulerConfig:
     enable_tokyo_fix_expedited: bool = True
     telegram: bool = False
     run_pipeline: bool = False
+    auto_approve: bool = False
+    regime_overrides: Optional[Dict[str, Dict[str, Any]]] = None
     summary_time_jst: str = DEFAULT_SUMMARY_TIME_JST
     ledger_path: Path = field(default_factory=lambda: DEFAULT_LEDGER_PATH)
     dry_run: bool = False
@@ -347,6 +411,10 @@ class SchedulerConfig:
                 cfg.telegram = True
             if getattr(args, "run_pipeline", False):
                 cfg.run_pipeline = True
+            if getattr(args, "auto_approve", False):
+                cfg.auto_approve = True
+            if getattr(args, "regime_overrides", None) is not None:
+                cfg.regime_overrides = parse_regime_overrides_arg(args.regime_overrides)
             if getattr(args, "no_expedited_fix", False):
                 cfg.enable_tokyo_fix_expedited = False
             if getattr(args, "dry_run", False):
@@ -590,6 +658,13 @@ class SignalScheduler:
         print(f"London/NY Overlap : {london_indicator}")
         print(f"Currency Pair     : {profile.pair}")
         print(f"Target Database   : {self.config.db_path.resolve()}")
+        if self.config.run_pipeline:
+            print(
+                f"Pipeline Mode     : Auto-Approve={'ON' if self.config.auto_approve else 'OFF'} | "
+                f"Telegram={'ON' if self.config.telegram else 'OFF'}"
+            )
+        if self.config.regime_overrides:
+            print(f"Regime Overrides  : {json.dumps(self.config.regime_overrides, sort_keys=True)}")
         if session["is_tokyo_fix_window"] and self.config.enable_tokyo_fix_expedited:
             print(f"NOTE              : Tokyo Fix active! Market ticks expedited to {eff_ticks}s cadence.")
         print("-" * 80)
@@ -752,11 +827,13 @@ class SignalScheduler:
         }
 
     def run_pipeline_evaluation(self) -> Dict[str, Any]:
-        """Run the signal pipeline after ticks collection, routing actionable approvals to Telegram if enabled."""
+        """Run the signal pipeline after ticks collection, routing actionable approvals or alerts to Telegram if enabled."""
         return run_signal_pipeline(
             pair=self.config.pair,
             db_path=str(self.config.db_path),
             ledger_path=self.config.ledger_path,
+            auto_approve=self.config.auto_approve,
+            regime_overrides=self.config.regime_overrides,
             telegram=bool(self.telegram_notifier is not None or self.config.telegram),
             telegram_notifier=self.telegram_notifier,
         )
@@ -827,6 +904,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Optional path to a .json, .yaml, or .yml configuration file (CLI flags override config values)",
+    )
+    parser.add_argument(
         "--pair",
         type=str,
         default=os.getenv("FX_PAIR", "USD/JPY"),
@@ -895,6 +978,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Automatically evaluate the LangGraph signal pipeline after each market ticks collection cycle",
     )
     parser.add_argument(
+        "--auto-approve",
+        action="store_true",
+        help="Automatically approve and record actionable paper trades without waiting for human confirmation",
+    )
+    parser.add_argument(
+        "--regime-overrides",
+        type=str,
+        default=None,
+        help="Optional JSON object string or .json file path mapping RiskRegime to {risk_pct|risk_fraction, sl_pips, tp_pips, use_atr}",
+    )
+    parser.add_argument(
         "--summary-time-jst",
         type=str,
         default=os.getenv("TELEGRAM_SUMMARY_TIME_JST", DEFAULT_SUMMARY_TIME_JST),
@@ -920,9 +1014,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> int:
+def main(argv: Optional[List[str]] = None) -> int:
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", type=str, default=None)
+    pre_args, _ = pre_parser.parse_known_args(argv)
+
     parser = build_arg_parser()
-    args = parser.parse_args()
+    if pre_args.config:
+        config_defaults = load_scheduler_config_file(pre_args.config)
+        parser.set_defaults(**config_defaults)
+
+    args = parser.parse_args(argv)
     config = SchedulerConfig.from_env_and_args(args)
 
     scheduler = SignalScheduler(config)
